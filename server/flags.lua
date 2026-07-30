@@ -1,0 +1,285 @@
+MZBan = MZBan or {}
+MZBan.Flags = MZBan.Flags or {}
+
+local scores = {}
+local trustedActions = {}
+local deniedAuditUntil = {}
+
+local function exportLimits()
+    return type(Config.Risk.ExportLimits) == 'table' and Config.Risk.ExportLimits or {}
+end
+
+local function exportAllowed(operation, invokingResource)
+    local access = type(Config.Risk.ExportAccess) == 'table' and Config.Risk.ExportAccess or {}
+    local allowed = access[operation]
+    return type(invokingResource) == 'string'
+        and type(allowed) == 'table'
+        and allowed[invokingResource] == true
+end
+
+local function sanitizeToken(value, fallback, allowWildcard)
+    value = tostring(value or fallback or ''):lower()
+    value = value:gsub('%c', ''):gsub('^%s+', ''):gsub('%s+$', '')
+    if allowWildcard == true and value == '*' then return value end
+    if value == '' or #value > 64 or not value:match('^[a-z0-9_.:%-]+$') then
+        return nil
+    end
+    return value
+end
+
+local function sanitizeEvidence(value, depth, counter)
+    local valueType = type(value)
+    local limits = exportLimits()
+    local maxDepth = math.max(1, tonumber(limits.MaxEvidenceDepth) or 2)
+    local maxKeys = math.max(1, tonumber(limits.MaxEvidenceKeys) or 20)
+    local maxString = math.max(1, tonumber(limits.MaxEvidenceString) or 256)
+
+    if valueType == 'string' then return MZBan.Truncate(value:gsub('%c', ' '), maxString) end
+    if valueType == 'number' or valueType == 'boolean' then return value end
+    if valueType ~= 'table' or depth >= maxDepth then return nil end
+
+    local output = {}
+    for key, item in pairs(value) do
+        if counter.count >= maxKeys then break end
+        local safeKey = tostring(key or ''):gsub('%c', '')
+        if safeKey ~= '' and #safeKey <= 64 then
+            local safeValue = sanitizeEvidence(item, depth + 1, counter)
+            if safeValue ~= nil then
+                output[safeKey] = safeValue
+                counter.count = counter.count + 1
+            end
+        end
+    end
+    return output
+end
+
+local function auditExportDenied(operation, invokingResource, reason)
+    local auditKey = tostring(operation) .. ':' .. tostring(invokingResource or 'unknown')
+    local now = GetGameTimer()
+    local cooldown = math.max(1000, tonumber(exportLimits().DeniedAuditCooldownMs) or 10000)
+    if (deniedAuditUntil[auditKey] or 0) > now then return end
+    deniedAuditUntil[auditKey] = now + cooldown
+
+    pcall(function()
+        local ready = MZBan.DB.IsReady()
+        if ready ~= true then return end
+        MZBan.DB.Audit('risk.export.denied', {
+            meta = {
+                operation = tostring(operation),
+                invoking_resource = tostring(invokingResource or 'unknown'),
+                reason = tostring(reason or 'untrusted_resource')
+            }
+        })
+    end)
+end
+
+local function defaultPoints(reason)
+    local points = Config.Risk.DefaultPoints[reason] or Config.Risk.DefaultPoints.generic or 25
+    return tonumber(points) or 25
+end
+
+local function getState(primary)
+    local state = scores[primary]
+    local now = MZBan.Now()
+
+    if not state then
+        state = { score = 0, last_update = now }
+        scores[primary] = state
+        return state
+    end
+
+    local elapsedMinutes = math.floor((now - (state.last_update or now)) / 60)
+    if elapsedMinutes > 0 then
+        local decay = elapsedMinutes * (tonumber(Config.Risk.DecayPointsEveryMinute or 0) or 0)
+        state.score = math.max(0, (tonumber(state.score or 0) or 0) - decay)
+        state.last_update = now
+    end
+
+    return state
+end
+
+local function trustedKey(src, action)
+    return tostring(src) .. ':' .. tostring(action or '*')
+end
+
+function MZBan.Flags.RegisterTrustedAction(src, action, durationMs)
+    if not Config.Risk.TrustedActions or not Config.Risk.TrustedActions.Enabled then return false end
+    src = tonumber(src)
+    action = sanitizeToken(action, nil, true)
+    if not src or src <= 0 or not GetPlayerName(src) or not action then
+        return false, 'invalid_request'
+    end
+
+    local duration = tonumber(durationMs or Config.Risk.TrustedActions.DefaultDurationMs or 8000) or 8000
+    duration = math.floor(duration)
+    local maxDuration = math.max(250, tonumber(exportLimits().MaxTrustedActionMs) or 30000)
+    if duration < 250 or duration > maxDuration then return false, 'invalid_duration' end
+    trustedActions[trustedKey(src, action)] = GetGameTimer() + duration
+    return true
+end
+
+local function isTrusted(src, reason)
+    if not Config.Risk.TrustedActions or not Config.Risk.TrustedActions.Enabled then return false end
+    local now = GetGameTimer()
+    local exact = trustedActions[trustedKey(src, reason)]
+    local any = trustedActions[trustedKey(src, '*')]
+
+    if exact and exact > now then return true end
+    if any and any > now then return true end
+    return false
+end
+
+function MZBan.Flags.GetScore(src)
+    local identifiers = MZBan.GetIdentifiers(src, { includeIp = false })
+    local primary = MZBan.GetPrimaryIdentifier(identifiers)
+    if not primary then return 0 end
+    return getState(primary).score or 0
+end
+
+function MZBan.Flags.FlagPlayer(src, reason, points, evidence, createdByResource)
+    if not Config.Risk.Enabled then return false, 'risk_disabled' end
+
+    src = tonumber(src)
+    if not src or not GetPlayerName(src) then return false, 'invalid_player' end
+
+    reason = sanitizeToken(reason, 'generic')
+    if not reason then return false, 'invalid_reason' end
+
+    if isTrusted(src, reason) then
+        return false, 'trusted_action'
+    end
+
+    if MZBan.HasPermission(src, Config.Permissions.Admin) then
+        return false, 'admin_ignored'
+    end
+
+    local identifiers = MZBan.GetIdentifiers(src, { includeIp = Config.Privacy.StoreIpLocal == true })
+    local primary = MZBan.GetPrimaryIdentifier(identifiers)
+    if not primary then return false, 'no_primary_identifier' end
+
+    local state = getState(primary)
+    local addPoints = tonumber(points or defaultPoints(reason)) or defaultPoints(reason)
+    addPoints = math.floor(addPoints)
+    local maxPointsPerFlag = math.max(1, tonumber(exportLimits().MaxPointsPerFlag) or 100)
+    if addPoints < 1 or addPoints > maxPointsPerFlag then return false, 'invalid_points' end
+    local maxScore = tonumber(Config.Risk.MaxScore or 200) or 200
+    state.score = math.min(maxScore, math.max(0, (tonumber(state.score or 0) or 0) + addPoints))
+    state.last_update = MZBan.Now()
+
+    local playerName = GetPlayerName(src)
+    local evidencePayload = sanitizeEvidence(
+        type(evidence) == 'table' and evidence or { detail = evidence },
+        0,
+        { count = 0 }
+    ) or {}
+
+    MZBan.DB.SaveFlag({
+        player_name = playerName,
+        primary_identifier = primary,
+        reason = reason,
+        points = addPoints,
+        score_after = state.score,
+        evidence = evidencePayload,
+        created_by_resource = createdByResource or GetCurrentResourceName()
+    })
+
+    MZBan.DB.Audit('risk.flag', {
+        target_source = src,
+        target_name = playerName,
+        meta = {
+            reason = reason,
+            points = addPoints,
+            score_after = state.score,
+            evidence = evidencePayload,
+            created_by_resource = createdByResource or GetCurrentResourceName()
+        }
+    })
+
+    local flagPayload = {
+        player_name = playerName,
+        identifiers = { byType = identifiers.byType },
+        reason = reason,
+        points = addPoints,
+        score_after = state.score,
+        evidence = evidencePayload,
+        created_by_resource = createdByResource or GetCurrentResourceName()
+    }
+
+    CreateThread(function()
+        MZBan.Cloud.ReportFlag(flagPayload)
+    end)
+
+    local fields = {
+        MZBan.Webhook.Field('Player', ('%s [%s]'):format(playerName, src), true),
+        MZBan.Webhook.Field('Motivo', reason, true),
+        MZBan.Webhook.Field('Pontos', tostring(addPoints), true),
+        MZBan.Webhook.Field('Score', tostring(state.score), true),
+        MZBan.Webhook.Field('Identifier', MZBan.Redact(primary), false),
+        MZBan.Webhook.Field('Evidência', MZBan.JsonEncode(evidencePayload), false)
+    }
+
+    if Config.Risk.AutoBan and state.score >= (Config.Risk.BanAt or 150) then
+        local ban, createError = MZBan.Bans.Create({
+            player_name = playerName,
+            reason = 'AutoBan por score alto: ' .. tostring(state.score) .. ' | último motivo: ' .. reason,
+            evidence = MZBan.JsonEncode(evidencePayload),
+            banned_by = 'mz_banguard',
+            banned_by_identifier = 'system:mz_banguard',
+            identifiers = identifiers,
+            tokens = MZBan.GetPlayerTokensSafe(src),
+            expires_at = nil
+        })
+        if not ban then
+            MZBan.Log('AutoBan persistence failed:', createError or 'unknown')
+            return false, 'autoban_persistence_failed', state.score
+        end
+
+        MZBan.Webhook.Send('AutoBan', '⛔ MZ BanGuard: autoban aplicado', 'AutoBan por score alto.', fields, 'danger')
+        CreateThread(function() MZBan.Cloud.ReportBan(ban) end)
+        DropPlayer(src, MZBan.Bans.FormatKickMessage(ban))
+        return true, 'autoban', state.score
+    end
+
+    if state.score >= (Config.Risk.KickAt or 110) then
+        MZBan.Webhook.Send('RiskKick', '⚠️ MZ BanGuard: kick por score alto', 'Jogador atingiu limite de kick por risco.', fields, 'danger')
+        DropPlayer(src, 'Você foi removido por comportamento suspeito. Código de revisão: MZ-RISK')
+        return true, 'kick', state.score
+    end
+
+    if state.score >= (Config.Risk.ReviewAt or 70) then
+        MZBan.Webhook.Send('RiskReview', '🚨 MZ BanGuard: revisão necessária', 'Jogador atingiu score alto. Recomendado spectate/revisão.', fields, 'warning')
+    elseif state.score >= (Config.Risk.AlertAt or 40) then
+        MZBan.Webhook.Send('RiskAlert', '⚠️ MZ BanGuard: alerta de risco', 'Jogador acumulou suspeitas.', fields, 'warning')
+    end
+
+    return true, 'flagged', state.score
+end
+
+exports('FlagPlayer', function(src, reason, points, evidence)
+    local invokingResource = GetInvokingResource()
+    if not exportAllowed('FlagPlayer', invokingResource) then
+        auditExportDenied('FlagPlayer', invokingResource, 'untrusted_resource')
+        return false, 'untrusted_resource'
+    end
+    return MZBan.Flags.FlagPlayer(src, reason, points, evidence, invokingResource)
+end)
+
+exports('RegisterTrustedAction', function(src, action, durationMs)
+    local invokingResource = GetInvokingResource()
+    if not exportAllowed('RegisterTrustedAction', invokingResource) then
+        auditExportDenied('RegisterTrustedAction', invokingResource, 'untrusted_resource')
+        return false, 'untrusted_resource'
+    end
+    return MZBan.Flags.RegisterTrustedAction(src, action, durationMs)
+end)
+
+exports('GetRiskScore', function(src)
+    local invokingResource = GetInvokingResource()
+    if not exportAllowed('GetRiskScore', invokingResource) then
+        auditExportDenied('GetRiskScore', invokingResource, 'untrusted_resource')
+        return nil, 'untrusted_resource'
+    end
+    src = tonumber(src)
+    if not src or src <= 0 or not GetPlayerName(src) then return nil, 'invalid_player' end
+    return MZBan.Flags.GetScore(src)
+end)
