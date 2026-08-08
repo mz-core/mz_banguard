@@ -1,6 +1,6 @@
 Config = {}
 
-Config.Version = '1.2.0'
+Config.Version = '1.4.1'
 Config.Debug = false
 
 Config.Permissions = {
@@ -135,7 +135,45 @@ Config.Risk = {
     -- revisados que realmente produzam detecções ou ações legítimas.
     ExportAccess = {
         FlagPlayer = {},
-        RegisterTrustedAction = {},
+        RegisterTrustedAction = {
+            -- Usado apenas para teleports administrativos autorizados.
+            mz_admin = true
+        },
+        RegisterSecurityLease = {
+            mz_admin = true,
+            mz_core = true
+        },
+        BeginSecurityLifecycle = {
+            mz_core = true,
+            mz_creator = true,
+            mz_clothing = true,
+            mz_tatto = true,
+            mz_houses = true,
+            mz_interiors = true
+        },
+        EndSecurityLifecycle = {
+            mz_core = true,
+            mz_creator = true,
+            mz_clothing = true,
+            mz_tatto = true,
+            mz_houses = true,
+            mz_interiors = true
+        },
+        CheckSecurityLifecycle = {
+            mz_core = true,
+            mz_creator = true,
+            mz_clothing = true,
+            mz_tatto = true,
+            mz_houses = true
+        },
+        ValidateEventContract = {
+            mz_admin = true,
+            mz_creator = true,
+            mz_clothing = true,
+            mz_tatto = true,
+            mz_houses = true,
+            mz_interiors = true
+        },
         GetRiskScore = {
             mz_admin = true
         }
@@ -156,6 +194,12 @@ Config.Risk = {
 
     AlertAt = 40,
     ReviewAt = 70,
+
+    -- PUNICAO AUTOMATICA (DESLIGADA PARA STAGING):
+    -- false = atingir KickAt gera somente alerta/revisao; nenhum DropPlayer.
+    -- true  = permite kick automatico por score. Ative somente depois de validar
+    --         individualmente todos os detectores que alimentam FlagPlayer.
+    AutoKick = false,
     KickAt = 110,
 
     -- Ban automático fica desligado por segurança. Use apenas depois de testar muito.
@@ -179,6 +223,516 @@ Config.Risk = {
     TrustedActions = {
         Enabled = true,
         DefaultDurationMs = 8000
+    }
+}
+
+-- Autorizacoes server-only, curtas e consumiveis. O export legado
+-- RegisterTrustedAction e traduzido para este contrato.
+Config.SecurityLeases = {
+    enabled = true,
+    defaultTtlMs = 8000,
+    maxTtlMs = 30000,
+    maxActivePerPlayer = 32,
+    cleanupIntervalMs = 5000,
+    audit = true,
+    capabilities = {
+        ['movement.teleport'] = { ttlMs = 10000, maxTtlMs = 30000, uses = 4, issuers = {
+            mz_admin = true, mz_core = true
+        } },
+        ['movement.noclip.staff'] = { ttlMs = 10000, maxTtlMs = 15000, uses = 8, issuers = { mz_admin = true } },
+        ['camera.spectate.staff'] = { ttlMs = 10000, maxTtlMs = 15000, uses = 8, issuers = { mz_admin = true } },
+        ['player.invincibility'] = { ttlMs = 8000, maxTtlMs = 15000, uses = 4, issuers = {
+            mz_admin = true
+        } },
+        ['player.model.change'] = { ttlMs = 8000, maxTtlMs = 15000, uses = 2, issuers = {
+            mz_core = true
+        } },
+        ['entity.spawn.ped'] = { ttlMs = 5000, maxTtlMs = 15000, uses = 16, issuers = {} },
+        ['entity.spawn.vehicle'] = { ttlMs = 5000, maxTtlMs = 15000, uses = 8, issuers = {
+            mz_admin = true
+        } },
+        ['entity.spawn.object'] = { ttlMs = 5000, maxTtlMs = 15000, uses = 32, issuers = {} },
+        ['event.clear_tasks.remote'] = { ttlMs = 3000, maxTtlMs = 8000, uses = 2, issuers = {} },
+        ['weapon.give.remote'] = { ttlMs = 3000, maxTtlMs = 8000, uses = 2, issuers = {} },
+        ['weapon.remove.remote'] = { ttlMs = 3000, maxTtlMs = 8000, uses = 2, issuers = {} },
+        ['event.explosion.scripted'] = { ttlMs = 3000, maxTtlMs = 8000, uses = 4, issuers = {} }
+    }
+}
+
+-- Sessoes server-side para transicoes de lifecycle. Diferente de uma whitelist,
+-- cada tipo possui emissor, escopo e TTL proprios; o cliente apenas confirma uma
+-- sessao que ja foi criada pelo servidor e nao consegue amplia-la.
+Config.SecurityLifecycle = {
+    enabled = true,
+    maxTtlMs = 300000,
+    maxActivePerPlayer = 4,
+    cleanupIntervalMs = 5000,
+    postConfirmGraceMs = 5000,
+    coordinateTolerance = 15.0,
+    confirmationTolerance = 25.0,
+    types = {
+        character_spawn = {
+            ttlMs = 45000,
+            issuers = { mz_core = true },
+            transitions = {
+                movement = true, model = true, camera = true,
+                invincibility = true, invisibility = true
+            }
+        },
+        respawn = {
+            ttlMs = 20000,
+            issuers = { mz_banguard = true },
+            transitions = {
+                movement = true, model = true, camera = true,
+                invincibility = true, invisibility = true
+            }
+        },
+        character_creation = {
+            ttlMs = 300000,
+            issuers = { mz_creator = true },
+            transitions = {
+                movement = true, model = true, camera = true,
+                invincibility = true, invisibility = true
+            }
+        },
+        cosmetic_session = {
+            ttlMs = 180000,
+            issuers = { mz_clothing = true, mz_tatto = true, mz_houses = true },
+            enders = { mz_clothing = true, mz_tatto = true, mz_houses = true },
+            transitions = { camera = true, invincibility = true, invisibility = true }
+        },
+        interior_transition = {
+            ttlMs = 15000,
+            issuers = { mz_houses = true },
+            transitions = { movement = true, camera = true }
+        },
+        interior_calibration = {
+            ttlMs = 30000,
+            issuers = { mz_interiors = true },
+            transitions = { movement = true, camera = true }
+        }
+    }
+}
+
+-- O mapeamento segue a classificacao observada do GTA/OneSync, mas permanece
+-- explicitamente marcado para validacao no artifact de staging. Entidades de
+-- populacao ambiente viram metrica; unknown/scripted continuam sob rate guard.
+Config.EntityClassification = {
+    enabled = true,
+    mappingVersion = 'gta5-population-v1',
+    mappingValidated = false,
+    populationTypes = {
+        [0] = { name = 'unknown_or_script_created', class = 'scripted_unknown' },
+        [1] = { name = 'random_permanent', class = 'ambient' },
+        [2] = { name = 'random_parked', class = 'ambient' },
+        [3] = { name = 'random_patrol', class = 'ambient' },
+        [4] = { name = 'random_scenario', class = 'ambient' },
+        [5] = { name = 'random_ambient', class = 'ambient' },
+        [6] = { name = 'permanent', class = 'scripted' },
+        [7] = { name = 'mission', class = 'scripted' },
+        [8] = { name = 'replay', class = 'system' },
+        [9] = { name = 'cache', class = 'system' },
+        [10] = { name = 'tool', class = 'system' }
+    },
+    classes = {
+        ambient = { alertOnRate = false, confidence = 'low' },
+        system = { alertOnRate = false, confidence = 'low' },
+        scripted = { alertOnRate = true, confidence = 'high' },
+        scripted_unknown = { alertOnRate = true, confidence = 'medium' },
+        unknown = { alertOnRate = true, confidence = 'medium' }
+    }
+}
+
+Config.EventContracts = {
+    enabled = true,
+    maxPayloadKeys = 24,
+    maxDepth = 2,
+    maxString = 256,
+    replayTtlMs = 60000,
+    cleanupIntervalMs = 10000,
+    trustedResources = {
+        mz_admin = true,
+        mz_creator = true,
+        mz_clothing = true,
+        mz_tatto = true,
+        mz_houses = true,
+        mz_interiors = true
+    },
+    contracts = {
+        ['lifecycle.creator.open'] = {
+            sourceOnline = true,
+            schema = { type = 'table', allowExtra = false, fields = {} }
+        },
+        ['lifecycle.clothing.open'] = {
+            sourceOnline = true,
+            schema = {
+                type = 'table', allowExtra = false,
+                fields = {
+                    shopId = { type = 'string', required = true, maxLength = 64 },
+                    securityLifecycleId = { type = 'string', required = false, maxLength = 96 }
+                }
+            }
+        },
+        ['lifecycle.tattoo.open'] = {
+            sourceOnline = true,
+            schema = {
+                type = 'table', allowExtra = false,
+                fields = {
+                    shopId = { type = 'string', required = true, maxLength = 64 },
+                    gender = { type = 'string', required = false, maxLength = 16 },
+                    model = { type = 'string', required = false, maxLength = 64 },
+                    securityLifecycleId = { type = 'string', required = false, maxLength = 96 }
+                }
+            }
+        },
+        ['lifecycle.house.enter'] = {
+            sourceOnline = true,
+            schema = {
+                type = 'table', allowExtra = false,
+                fields = {
+                    houseCode = { type = 'string', required = false, maxLength = 64 },
+                    code = { type = 'string', required = false, maxLength = 64 }
+                }
+            }
+        },
+        ['lifecycle.house.confirm'] = {
+            sourceOnline = true,
+            schema = {
+                type = 'table', allowExtra = false,
+                fields = {
+                    houseCode = { type = 'string', required = false, maxLength = 64 },
+                    code = { type = 'string', required = false, maxLength = 64 }
+                }
+            }
+        },
+        ['lifecycle.house.leave'] = {
+            sourceOnline = true,
+            schema = { type = 'table', allowExtra = false, fields = {} }
+        },
+        ['lifecycle.interiors.calibration.exit'] = {
+            sourceOnline = true,
+            schema = { type = 'table', allowExtra = false, fields = {} }
+        },
+        ['lifecycle.interiors.calibration.result'] = {
+            sourceOnline = true,
+            schema = {
+                type = 'table', allowExtra = false,
+                fields = {
+                    phase = { type = 'string', required = true, maxLength = 8 },
+                    lifecycleId = { type = 'string', required = false, maxLength = 96 },
+                    success = { type = 'boolean', required = true },
+                    error = {
+                        type = 'string', required = false, maxLength = 64,
+                        pattern = '^[a-z0-9_]+$'
+                    }
+                }
+            }
+        },
+        ['lifecycle.interiors.calibration.report'] = {
+            sourceOnline = true,
+            schema = {
+                type = 'table', allowExtra = false,
+                fields = {
+                    code = { type = 'string', required = true, maxLength = 64, pattern = '^[a-z0-9_]+$' },
+                    x = { type = 'number', required = true, min = -20000, max = 20000 },
+                    y = { type = 'number', required = true, min = -20000, max = 20000 },
+                    z = { type = 'number', required = true, min = -2000, max = 3000 },
+                    heading = { type = 'number', required = true, min = 0, max = 360 },
+                    expectedInteriorId = { type = 'number', required = true, min = 1 },
+                    resolvedInteriorId = { type = 'number', required = true, min = 1 },
+                    interiorMatches = { type = 'boolean', required = true }
+                }
+            }
+        }
+    }
+}
+
+Config.SecurityCorrelation = {
+    enabled = true,
+    ttlMs = 120000,
+    maxEntriesPerPlayer = 32,
+    maxDataKeys = 16,
+    maxString = 128
+}
+
+Config.DetectorHealth = {
+    enabled = true,
+    ruleVersion = '1.4.0',
+    heartbeatIntervalMs = 15000,
+    heartbeatMissingMs = 45000,
+    cleanupIntervalMs = 10000
+}
+
+-- Configuracao comum da Central. Estes limites controlam armazenamento,
+-- notificacao e relatos client-side; nao habilitam punicao automatica.
+Config.SecurityAlerts = {
+    notifyStaff = true,
+    -- Durante staging, medium/high/critical notificam a Staff. Incidentes info/low
+    -- continuam visiveis na Central sem popup.
+    notifyMinimumSeverity = 'medium',
+    aggregateWindowMs = 15000,
+    duplicateCooldownMs = 1500,
+    notificationCooldownMs = 10000,
+    incidentTtlMs = 3600000,
+    cleanupIntervalMs = 60000,
+    maxIncidents = 1000,
+    maxEvidencePerIncident = 20,
+    maxNotesPerIncident = 25,
+
+    clientReportWindowMs = 10000,
+    clientReportLimit = 8,
+    clientReasonCooldownMs = 8000,
+
+    trustedConsumers = {
+        mz_admin = true
+    },
+
+    permissions = {
+        view = 'mz_banguard.alerts.view',
+        details = 'mz_banguard.alerts.details',
+        acknowledge = 'mz_banguard.alerts.acknowledge',
+        note = 'mz_banguard.alerts.note',
+        clear = 'mz_banguard.alerts.clear',
+        identifiers = 'mz_banguard.alerts.identifiers',
+        spectate = 'mz_banguard.actions.spectate',
+        gotoPlayer = 'mz_banguard.actions.goto',
+        kick = 'mz_banguard.actions.kick',
+        ban = 'mz_banguard.actions.ban'
+    },
+
+    riskPoints = {
+        entity_spawn_rate_suspect = 45,
+        entity_model_blocked = 55,
+        movement_teleport_suspect = 35,
+        movement_noclip_suspect = 30,
+        movement_vehicle_reentry_distance = 25,
+        camera_freecam_suspect = 25,
+        camera_spectate_unapproved = 30,
+        player_model_change_unapproved = 25,
+        player_godmode_suspect = 30,
+        player_invisible_suspect = 25,
+        event_explosion_rate_suspect = 40,
+        event_explosion_anomaly_suspect = 55,
+        event_clear_tasks_rate_suspect = 35,
+        event_remote_clear_tasks_suspect = 55,
+        event_tazer_rate_suspect = 35,
+        event_ptfx_rate_suspect = 35,
+        event_ptfx_anomaly_suspect = 45,
+        event_projectile_rate_suspect = 40,
+        event_fire_rate_suspect = 35,
+        event_fire_remote_suspect = 45,
+        event_remote_weapon_action_suspect = 55,
+        event_damage_modifier_suspect = 50,
+        aim_headshot_pattern_suspect = 30
+    }
+}
+
+Config.WeaponGuard = {
+    -- LIGA/DESLIGA O OBSERVADOR INTEIRO:
+    -- false = ignora weaponDamageEvent, nao cria incidentes e nao notifica.
+    enabled = true,
+
+    -- MODOS DISPONIVEIS:
+    -- 'observe' = recomendado. Registra, agrega e notifica, mas nunca cancela o dano.
+    -- 'enforce' = permite cancelar somente divergencias de alta confianca e apenas
+    --             quando cancelHighConfidence e runtimeValidated tambem forem true.
+    mode = 'observe',
+
+    -- TRAVAS DO ENFORCE:
+    -- Deixe ambas false ate concluir todos os testes do checklist de staging.
+    -- Mesmo com mode = 'enforce', qualquer uma delas false impede o cancelamento.
+    cancelHighConfidence = false,
+    runtimeValidated = false,
+
+    -- Envia alertas high/critical apenas para Staff com permissao, usando cooldown.
+    notifyStaff = true,
+
+    transitionWindowMs = 2500,
+    aggregateWindowMs = 10000,
+    duplicateCooldownMs = 1500,
+    notificationCooldownMs = 10000,
+    incidentTtlMs = 3600000,
+    cleanupIntervalMs = 60000,
+    maxIncidents = 1000,
+    maxEvidencePerIncident = 20,
+    maxNotesPerIncident = 25,
+
+    rateWindowMs = 1000,
+    rateEventThreshold = 25,
+    -- Perfis conservadores por arma. O fallback preserva o limite historico.
+    -- Estes limites geram somente alerta enquanto mode='observe'.
+    rateProfiles = {
+        default = { windowMs = 1000, threshold = 25 },
+        WEAPON_PISTOL = { windowMs = 1000, threshold = 35 },
+        WEAPON_SMG = { windowMs = 1000, threshold = 65 },
+        WEAPON_PUMPSHOTGUN = { windowMs = 1000, threshold = 15 },
+        WEAPON_CARBINERIFLE = { windowMs = 1000, threshold = 70 },
+        WEAPON_SNIPERRIFLE = { windowMs = 1000, threshold = 10 },
+        WEAPON_MG = { windowMs = 1000, threshold = 90 },
+        WEAPON_RPG = { windowMs = 1000, threshold = 6 }
+    },
+
+    trustedConsumers = {
+        mz_admin = true
+    },
+
+    permissions = {
+        view = 'mz_banguard.alerts.view',
+        details = 'mz_banguard.alerts.details',
+        acknowledge = 'mz_banguard.alerts.acknowledge',
+        note = 'mz_banguard.alerts.note',
+        clear = 'mz_banguard.alerts.clear',
+        identifiers = 'mz_banguard.alerts.identifiers',
+        spectate = 'mz_banguard.actions.spectate',
+        gotoPlayer = 'mz_banguard.actions.goto',
+        kick = 'mz_banguard.actions.kick',
+        ban = 'mz_banguard.actions.ban'
+    },
+
+    riskPoints = {
+        weapon_damage_no_equipped_weapon = 45,
+        weapon_damage_hash_mismatch = 35,
+        weapon_damage_unknown_hash = 25,
+        weapon_damage_payload_invalid = 20,
+        weapon_damage_rate_suspect = 25,
+        weapon_damage_session_not_ready = 0,
+        weapon_damage_transition_window = 0
+    },
+
+    knownWeaponNames = {
+        'WEAPON_PISTOL',
+        'WEAPON_SMG',
+        'WEAPON_PUMPSHOTGUN',
+        'WEAPON_CARBINERIFLE',
+        'WEAPON_SNIPERRIFLE',
+        'WEAPON_MG',
+        'WEAPON_RPG'
+    }
+}
+
+Config.EntityGuard = {
+    -- MODOS: enabled=false desliga; observe somente alerta; enforce fica
+    -- reservado para cancelamento futuro. Nesta entrega nao existe CancelEvent.
+    enabled = true,
+    mode = 'observe',
+    cancelHighConfidence = false,
+    runtimeValidated = false,
+    windowMs = 10000,
+    burstWindowMs = 2000,
+    inspectDelayMs = 250,
+    ownerResolveAttempts = 3,
+    ownerResolveRetryMs = 200,
+    limits = {
+        ped = 6,
+        vehicle = 12,
+        object = 20
+    },
+    burstLimits = {
+        ped = 4,
+        vehicle = 8,
+        object = 12
+    },
+    blockedModels = {
+        ped = {},
+        vehicle = {},
+        object = {}
+    }
+}
+
+Config.MovementGuard = {
+    -- Todas as verificacoes abaixo apenas registram na Central.
+    enabled = true,
+    mode = 'observe',
+    runtimeValidated = false,
+    sampleIntervalMs = 1000,
+    spawnGraceMs = 20000,
+    serverFallbackGraceMs = 3000,
+    serverFootDistance = 220.0,
+    serverVehicleDistance = 650.0,
+    clientFootDistance = 160.0,
+    clientVehicleDistance = 500.0,
+    noclipDistance = 12.0,
+    noclipHeight = 5.0,
+    vehicleReentryDistance = 80.0,
+    vehicleReentryWindowMs = 15000
+}
+
+Config.PlayerStateGuard = {
+    -- Sinais client-side de baixa/media confianca; nunca punem sozinhos.
+    enabled = true,
+    mode = 'observe',
+    runtimeValidated = false,
+    sampleIntervalMs = 1500,
+    spawnGraceMs = 20000,
+    freecamDistance = 70.0,
+    maxInvisibleAlpha = 120,
+    samples = {
+        freecam = 4,
+        spectate = 3,
+        godmode = 5,
+        invisible = 5,
+        modelChange = 3
+    }
+}
+
+Config.EventGuard = {
+    -- Observe nao cancela explosao, tazer ou clearPedTasksEvent.
+    enabled = true,
+    mode = 'observe',
+    cancelHighConfidence = false,
+    runtimeValidated = false,
+    windows = {
+        explosionMs = 10000,
+        clearTasksMs = 10000,
+        tazerMs = 10000,
+        ptfxMs = 10000,
+        projectileMs = 10000,
+        fireMs = 10000,
+        remoteWeaponMs = 10000,
+        modifierMs = 10000
+    },
+    limits = {
+        explosion = 8,
+        clearTasks = 8,
+        tazer = 5,
+        ptfx = 12,
+        projectile = 10,
+        fire = 10,
+        remoteWeapon = 3,
+        modifier = 2
+    },
+    maxParticleScale = 5.0,
+    maxFireDistance = 160.0,
+    maxExplosionDistance = 250.0,
+    maxDamageScale = 1.0,
+    maxWeaponDamageModifier = 1.05,
+    maxMeleeDamageModifier = 1.05,
+    maxWeaponDefenseModifier = 1.05
+}
+
+Config.AimGuard = {
+    -- Analise estatistica minima. Permanece somente-alerta mesmo no futuro
+    -- ate existir baseline representativa e revisao manual de falsos positivos.
+    enabled = true,
+    mode = 'observe',
+    runtimeValidated = false,
+    windowMs = 60000,
+    minimumHits = 12,
+    minimumHeadshots = 10,
+    headshotRatio = 0.85,
+    requiredQualifiedWindows = 2,
+    candidateDecayWindows = 1,
+    distanceBands = { 25.0, 75.0, 150.0 },
+    pingBands = { 60, 120, 200 },
+    headComponents = { 31086 },
+    weaponNames = {
+        'WEAPON_PISTOL',
+        'WEAPON_COMBATPISTOL',
+        'WEAPON_SMG',
+        'WEAPON_CARBINERIFLE',
+        'WEAPON_ASSAULTRIFLE',
+        'WEAPON_SNIPERRIFLE',
+        'WEAPON_HEAVYSNIPER'
     }
 }
 

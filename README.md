@@ -1,4 +1,4 @@
-# mz_banguard 1.2
+# mz_banguard 1.4
 
 Resource FiveM para ban/unban local, integração com cloud central, flags de risco, webhooks e auditoria.
 
@@ -30,6 +30,20 @@ Os ACEs `mzban.*` são preservados para instalações antigas, mas não são exi
 Config.LegacyCommands.RequireLegacyAceForPlayers = true
 ```
 
+## Politica somente de alertas
+
+Durante staging, mantenha:
+
+```lua
+Config.Risk.AutoKick = false
+Config.Risk.AutoBan = false
+Config.WeaponGuard.mode = 'observe'
+Config.WeaponGuard.cancelHighConfidence = false
+Config.WeaponGuard.runtimeValidated = false
+```
+
+`KickAt` e `BanAt` podem ser calibrados enquanto as chaves automaticas estao desligadas. Atingir esses scores continua produzindo log/revisao, mas nao remove nem bane o jogador.
+
 ## Comandos
 
 ```txt
@@ -49,6 +63,7 @@ Os exports de risco começam fechados por operação. Antes de usar os exemplos,
 ```lua
 Config.Risk.ExportAccess.FlagPlayer.mz_detector = true
 Config.Risk.ExportAccess.RegisterTrustedAction.mz_admin = true
+Config.Risk.ExportAccess.RegisterSecurityLease.mz_admin = true
 ```
 
 Não autorize um consumer apenas porque ele já usa outro export. Pontos, janela confiável e evidência têm limites server-side. Veja [docs/RISK_EXPORT_SECURITY_CONTRACT.md](docs/RISK_EXPORT_SECURITY_CONTRACT.md).
@@ -68,6 +83,34 @@ exports['mz_banguard']:FlagPlayer(source, 'event_injection', 100, {
 exports['mz_banguard']:RegisterTrustedAction(source, 'teleport', 10000)
 ```
 
+O export legado acima continua compatível, mas novas integrações devem usar uma
+capacidade curta, consumível e contextualizada:
+
+```lua
+exports['mz_banguard']:RegisterSecurityLease(source, 'movement.teleport', 10000, {
+  x = destination.x,
+  y = destination.y,
+  z = destination.z,
+  quantity = 1,
+  reason = 'garage_exit'
+})
+```
+
+O emissor é obtido por `GetInvokingResource()`; cliente, wildcard e resource não
+autorizado não conseguem criar lease.
+
+### Sessao de lifecycle
+
+A versao 1.4 adiciona sessoes server-side para spawn, criacao de personagem,
+edicao cosmetica, respawn e transicao de interior. O tipo define as transicoes
+permitidas e o cliente nao escolhe escopo nem amplia TTL. `mz_core`, `mz_creator`,
+`mz_clothing`, `mz_tatto` e `mz_houses` ja possuem integracoes revisadas.
+
+O Entity Guard separa populacao ambiente/system de entidades scripted/unknown.
+Ambiente continua gerando metrica, mas ownership proximo nao vira incidente de
+spawn por si so. O Weapon Guard v2 consulta apenas o snapshot oficial do Core e
+registra cadencia por arma, alvo, distancia e revisoes como evidencia.
+
 ### Consultar score
 
 ```lua
@@ -79,6 +122,12 @@ local score = exports['mz_banguard']:GetRiskScore(source)
 O `mz_admin` usa exports server-side protegidos para prontidão, criação, revogação, consulta e listagem. Esses exports aceitam somente resources confiáveis, revalidam permissões globais no `mz_core` e nunca retornam identifiers, tokens ou IP.
 
 Veja [docs/INTEGRATION_API_CONTRACT.md](docs/INTEGRATION_API_CONTRACT.md) e [docs/RUNTIME_CHECKLIST.md](docs/RUNTIME_CHECKLIST.md).
+
+O roteiro dos proximos detectores (spawn de entidades, movement/freecam/noclip, troca de skin, godmode, eventos e analise de mira) esta em [docs/GUARD_ENTITY_MOVEMENT_AIM_IMPLEMENTATION_PLAN.md](docs/GUARD_ENTITY_MOVEMENT_AIM_IMPLEMENTATION_PLAN.md). Todos os lotes comecam em modo somente-alerta.
+
+Os observadores desses lotes estao ativos em `observe`. Use [docs/SECURITY_OBSERVERS_STAGING_CHECKLIST.md](docs/SECURITY_OBSERVERS_STAGING_CHECKLIST.md) para validar peds/veiculos/objetos, movimento, camera, estado do jogador, eventos e mira sem habilitar punicao automatica. A migracao gradual dos fluxos legitimos esta registrada em [docs/RESOURCE_SECURITY_INTEGRATION_MATRIX.md](docs/RESOURCE_SECURITY_INTEGRATION_MATRIX.md).
+
+O escopo, o que foi implantado e os passos que ainda exigem staging estao em [docs/BANGUARD_PHASE_2_HARDENING_PLAN.md](docs/BANGUARD_PHASE_2_HARDENING_PLAN.md).
 
 ## Cloud
 

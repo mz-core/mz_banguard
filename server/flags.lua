@@ -2,7 +2,6 @@ MZBan = MZBan or {}
 MZBan.Flags = MZBan.Flags or {}
 
 local scores = {}
-local trustedActions = {}
 local deniedAuditUntil = {}
 
 local function exportLimits()
@@ -98,14 +97,22 @@ local function getState(primary)
     return state
 end
 
-local function trustedKey(src, action)
-    return tostring(src) .. ':' .. tostring(action or '*')
+local TRUSTED_ALIASES = {
+    teleport = 'movement.teleport',
+    noclip = 'movement.noclip.staff',
+    godmode = 'player.invincibility',
+    spectate = 'camera.spectate.staff'
+}
+
+local function trustedCapability(action)
+    action = sanitizeToken(action, nil, false)
+    return action and (TRUSTED_ALIASES[action] or action) or nil
 end
 
-function MZBan.Flags.RegisterTrustedAction(src, action, durationMs)
+function MZBan.Flags.RegisterTrustedAction(src, action, durationMs, issuer, context)
     if not Config.Risk.TrustedActions or not Config.Risk.TrustedActions.Enabled then return false end
     src = tonumber(src)
-    action = sanitizeToken(action, nil, true)
+    action = trustedCapability(action)
     if not src or src <= 0 or not GetPlayerName(src) or not action then
         return false, 'invalid_request'
     end
@@ -114,19 +121,34 @@ function MZBan.Flags.RegisterTrustedAction(src, action, durationMs)
     duration = math.floor(duration)
     local maxDuration = math.max(250, tonumber(exportLimits().MaxTrustedActionMs) or 30000)
     if duration < 250 or duration > maxDuration then return false, 'invalid_duration' end
-    trustedActions[trustedKey(src, action)] = GetGameTimer() + duration
-    return true
+    if not MZBan.SecurityLeases or type(MZBan.SecurityLeases.Issue) ~= 'function' then
+        return false, 'leases_unavailable'
+    end
+    local leaseId, err = MZBan.SecurityLeases.Issue(src, action, duration, context, issuer)
+    if not leaseId then return false, err end
+    return true, nil, leaseId
 end
 
 local function isTrusted(src, reason)
     if not Config.Risk.TrustedActions or not Config.Risk.TrustedActions.Enabled then return false end
-    local now = GetGameTimer()
-    local exact = trustedActions[trustedKey(src, reason)]
-    local any = trustedActions[trustedKey(src, '*')]
+    local capability = trustedCapability(reason)
+    if not capability or not MZBan.SecurityLeases or type(MZBan.SecurityLeases.Check) ~= 'function' then return false end
+    return MZBan.SecurityLeases.Check(src, capability, {}) == true
+end
 
-    if exact and exact > now then return true end
-    if any and any > now then return true end
-    return false
+function MZBan.Flags.IsTrusted(src, reason)
+    src = tonumber(src)
+    reason = trustedCapability(reason)
+    if not src or not reason then return false end
+    return isTrusted(src, reason)
+end
+
+function MZBan.Flags.ConsumeTrusted(src, reason, context)
+    src = tonumber(src)
+    reason = trustedCapability(reason)
+    if not src or not reason or not MZBan.SecurityLeases
+        or type(MZBan.SecurityLeases.Consume) ~= 'function' then return false end
+    return MZBan.SecurityLeases.Consume(src, reason, context or {}) == true
 end
 
 function MZBan.Flags.GetScore(src)
@@ -240,7 +262,7 @@ function MZBan.Flags.FlagPlayer(src, reason, points, evidence, createdByResource
         return true, 'autoban', state.score
     end
 
-    if state.score >= (Config.Risk.KickAt or 110) then
+    if Config.Risk.AutoKick == true and state.score >= (Config.Risk.KickAt or 110) then
         MZBan.Webhook.Send('RiskKick', '⚠️ MZ BanGuard: kick por score alto', 'Jogador atingiu limite de kick por risco.', fields, 'danger')
         DropPlayer(src, 'Você foi removido por comportamento suspeito. Código de revisão: MZ-RISK')
         return true, 'kick', state.score
@@ -270,7 +292,7 @@ exports('RegisterTrustedAction', function(src, action, durationMs)
         auditExportDenied('RegisterTrustedAction', invokingResource, 'untrusted_resource')
         return false, 'untrusted_resource'
     end
-    return MZBan.Flags.RegisterTrustedAction(src, action, durationMs)
+    return MZBan.Flags.RegisterTrustedAction(src, action, durationMs, invokingResource)
 end)
 
 exports('GetRiskScore', function(src)

@@ -1,4 +1,4 @@
-# Checklist runtime do MZ BanGuard 1.2
+# Checklist runtime do MZ BanGuard 1.3
 
 Testes não executados não podem ser marcados como aprovados.
 
@@ -22,6 +22,12 @@ Testes não executados não podem ser marcados como aprovados.
 - [ ] Com schema completo, `IsReady()` retorna `true`.
 - [ ] Resource não confiável recebe `untrusted_resource` nos exports de mutação e leitura.
 - [ ] Parar `mz_core` faz a integração falhar fechada.
+
+## Politica somente de alertas
+
+- [ ] Confirmar `Config.Risk.AutoKick = false` e `Config.Risk.AutoBan = false`.
+- [ ] Atingir `KickAt` com `AutoKick = false` gera revisao sem `DropPlayer`.
+- [ ] A Central de Alertas mostra cancelamento, autokick e autoban como desligados.
 
 ## Ban
 
@@ -56,7 +62,9 @@ Testes não executados não podem ser marcados como aprovados.
 - [ ] Resource não listado recebe `untrusted_resource` nos três exports de risco e não altera score/janela.
 - [ ] Consumer listado somente em `FlagPlayer` não consegue chamar `RegisterTrustedAction` ou `GetRiskScore`.
 - [ ] `FlagPlayer` autorizado limita pontos, tamanho/profundidade da evidência e registra `created_by_resource`.
-- [ ] `RegisterTrustedAction` autorizado limita duração e preserva o wildcard histórico somente dentro da janela.
+- [ ] `RegisterTrustedAction` autorizado limita duração e rejeita wildcard, inclusive no contrato legado.
+- [ ] `RegisterSecurityLease` rejeita resource/capacidade indevidos, TTL excessivo e contexto divergente.
+- [ ] Lease consumida, expirada ou revogada por stop/drop não pode ser reutilizada.
 - [ ] `GetRiskScore` autorizado recusa source offline.
 - [ ] Negação por resource gera `risk.export.denied` sem identifier ou evidência sensível.
 - [ ] `FlagPlayer`, `RegisterTrustedAction` e `GetRiskScore` preservam assinatura para consumers explicitamente autorizados.

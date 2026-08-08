@@ -3,6 +3,7 @@ local invokingResource = 'untrusted_resource'
 local savedFlags = {}
 local audits = {}
 local gameTimer = 1000
+local droppedPlayers = 0
 
 local function expect(condition, message)
     if not condition then error(message, 2) end
@@ -38,8 +39,9 @@ Config = {
         DecayPointsEveryMinute = 0,
         MaxScore = 200,
         AlertAt = 500,
-        ReviewAt = 600,
-        KickAt = 700,
+        ReviewAt = 25,
+        AutoKick = false,
+        KickAt = 25,
         AutoBan = false,
         BanAt = 800,
         DefaultPoints = {
@@ -101,6 +103,21 @@ MZBan = {
     end
 }
 
+local trustedLease
+MZBan.SecurityLeases = {
+    Issue = function(sourceId, capability, duration, _, issuer)
+        if issuer ~= 'test_controller' or capability ~= 'movement.teleport' then
+            return nil, 'issuer_not_allowed'
+        end
+        trustedLease = { source = sourceId, capability = capability, expiresAt = gameTimer + duration }
+        return 'LEASE-1'
+    end,
+    Check = function(sourceId, capability)
+        return trustedLease ~= nil and trustedLease.source == sourceId
+            and trustedLease.capability == capability and trustedLease.expiresAt > gameTimer
+    end
+}
+
 exports = setmetatable({}, {
     __call = function(_, name, callback)
         exported[name] = callback
@@ -128,7 +145,7 @@ function CreateThread(callback)
 end
 
 function DropPlayer()
-    error('limites altos nao deveriam remover o jogador')
+    droppedPlayers = droppedPlayers + 1
 end
 
 dofile('mz_banguard/server/flags.lua')
@@ -176,11 +193,14 @@ expect(ok == false and err == 'invalid_points', 'pontuacao acima do limite foi a
 expect(#savedFlags == 1, 'pontuacao invalida causou persistencia')
 
 invokingResource = 'test_controller'
-ok, err = exported.RegisterTrustedAction(2, '*', 30001)
+ok, err = exported.RegisterTrustedAction(2, 'movement.teleport', 30001)
 expect(ok == false and err == 'invalid_duration', 'janela confiavel acima do limite foi aceita')
 
 ok, err = exported.RegisterTrustedAction(2, '*', 1000)
-expect(ok == true and err == nil, 'janela confiavel wildcard autorizada falhou')
+expect(ok == false and err == 'invalid_request', 'janela confiavel wildcard foi aceita')
+
+ok, err = exported.RegisterTrustedAction(2, 'teleport', 1000)
+expect(ok == true and err == nil, 'lease de teleport autorizada falhou')
 
 invokingResource = 'test_detector'
 ok, err, score = exported.FlagPlayer(2, 'teleport', 10, {})
@@ -190,9 +210,16 @@ expect(#savedFlags == 1, 'acao confiavel causou persistencia de flag')
 gameTimer = 2500
 ok, err, score = exported.FlagPlayer(2, 'teleport', 10, {})
 expect(ok == true and err == 'flagged' and score == 30, 'flag nao retornou apos expirar janela confiavel')
+expect(droppedPlayers == 0, 'AutoKick=false removeu jogador ao atingir KickAt')
 
 invokingResource = 'mz_admin'
 score, err = exported.GetRiskScore(2)
 expect(score == 30 and err == nil, 'consumer autorizado nao leu score')
+
+Config.Risk.AutoKick = true
+invokingResource = 'test_detector'
+ok, err, score = exported.FlagPlayer(2, 'teleport', 10, {})
+expect(ok == true and err == 'kick' and score == 40, 'AutoKick=true nao respeitou KickAt')
+expect(droppedPlayers == 1, 'AutoKick=true nao executou exatamente um kick')
 
 print('mz_banguard risk export access harness: PASS')

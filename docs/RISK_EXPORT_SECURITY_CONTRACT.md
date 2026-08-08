@@ -2,12 +2,16 @@
 
 ## Escopo
 
-`FlagPlayer`, `RegisterTrustedAction` e `GetRiskScore` preservam os nomes e assinaturas históricas, mas cada operação possui allowlist server-side própria:
+`FlagPlayer`, `RegisterTrustedAction` e `GetRiskScore` preservam os nomes e assinaturas históricas. `RegisterSecurityLease` é o contrato recomendado para novas integrações. Cada operação possui allowlist server-side própria:
 
 ```lua
 Config.Risk.ExportAccess = {
     FlagPlayer = {},
     RegisterTrustedAction = {},
+    RegisterSecurityLease = {
+        mz_admin = true,
+        mz_core = true
+    },
     GetRiskScore = {
         mz_admin = true
     }
@@ -24,16 +28,17 @@ Um resource somente deve ser autorizado depois de revisar:
 - possibilidade de o cliente escolher alvo, motivo, pontos ou evidência;
 - rate limit do consumer;
 - política de falsos positivos;
-- uso de `RegisterTrustedAction` somente ao redor de ações legítimas controladas pelo servidor.
+- uso de `RegisterSecurityLease` somente ao redor de ações legítimas controladas pelo servidor.
 
 Exemplo explícito:
 
 ```lua
 Config.Risk.ExportAccess.FlagPlayer.mz_detector = true
 Config.Risk.ExportAccess.RegisterTrustedAction.mz_admin = true
+Config.Risk.ExportAccess.RegisterSecurityLease.mz_admin = true
 ```
 
-Autorizar `FlagPlayer` não autoriza `RegisterTrustedAction` ou `GetRiskScore`. Nenhum consumer mutante vem habilitado por padrão.
+Autorizar `FlagPlayer` não autoriza `RegisterTrustedAction`, `RegisterSecurityLease` ou `GetRiskScore`.
 
 ## Validação
 
@@ -46,9 +51,22 @@ Autorizar `FlagPlayer` não autoriza `RegisterTrustedAction` ou `GetRiskScore`. 
 - ausência de janela confiável ativa;
 - player sem ACE administrativa ignorada pelo risco.
 
-`RegisterTrustedAction` exige player online, token de ação válido e duração entre 250 ms e `MaxTrustedActionMs`. O token `*` é preservado para compatibilidade, mas só um resource autorizado pode registrá-lo.
+`RegisterTrustedAction` exige player online, ação legada conhecida e duração entre 250 ms e `MaxTrustedActionMs`. Ele traduz a ação para uma capability v2 e rejeita `*`.
+
+`RegisterSecurityLease` exige player online, capability declarada, resource autorizado para a operação e para a capability, TTL dentro do teto e contexto sanitizado. A lease possui usos limitados, é consumida pelo detector e é revogada no `playerDropped` ou no stop do emissor. `reason` e `correlationId` são somente metadados de auditoria; modelo, bucket, alvo e coordenadas participam da correspondência quando informados.
 
 `GetRiskScore` exige consumer autorizado e player online.
+
+## Politica de punicao automatica
+
+O padrao de staging e somente alerta:
+
+```lua
+Config.Risk.AutoKick = false
+Config.Risk.AutoBan = false
+```
+
+Com `AutoKick = false`, ultrapassar `KickAt` nao chama `DropPlayer`; o fluxo segue para alerta/revisao. `AutoKick = true` deve ser habilitado somente em mudanca separada, depois de validar todos os detectores autorizados em `FlagPlayer`. `AutoBan` e independente e permanece desligado por padrao.
 
 ## Falhas e auditoria
 
