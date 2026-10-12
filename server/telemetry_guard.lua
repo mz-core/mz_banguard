@@ -43,6 +43,17 @@ local function sectionEnabled(name)
     return playerConfig().enabled == true
 end
 
+local function hasActiveCharacter(sourceId)
+    local resource = tostring(Config.Integration and Config.Integration.CoreResource or 'mz_core')
+    if GetResourceState(resource) ~= 'started' then return false end
+    local ok, identity = pcall(function()
+        local coreExports = exports[resource]
+        return coreExports.ResolvePlayerIdentity(coreExports, sourceId)
+    end)
+    return ok and type(identity) == 'table' and identity.ok == true
+        and identity.active == true and identity.characterId ~= nil
+end
+
 local function finiteNumber(value, minimum, maximum)
     value = tonumber(value)
     if not value or value ~= value or value == math.huge or value == -math.huge then return nil end
@@ -117,7 +128,9 @@ local function isExempt(sourceId, code, context)
         return adminState(sourceId, 'IsNoClipEnabled') or adminState(sourceId, 'IsSpectating')
     end
     if code == 'movement_teleport_suspect' or code == 'movement_vehicle_reentry_distance' then
-        return isTrusted(sourceId, 'movement.teleport', leaseContext(sourceId, context), true)
+        return adminState(sourceId, 'IsNoClipEnabled')
+            or isTrusted(sourceId, 'movement.noclip.staff', leaseContext(sourceId, context), true)
+            or isTrusted(sourceId, 'movement.teleport', leaseContext(sourceId, context), true)
             or adminState(sourceId, 'IsSpectating')
     end
     if code == 'player_model_change_unapproved' then
@@ -166,6 +179,10 @@ local function acceptReport(sourceId, code, payload)
         return false
     end
     sourceId = math.floor(sourceId)
+    if not hasActiveCharacter(sourceId) then
+        if MZBan.DetectorHealth then MZBan.DetectorHealth.Discard('telemetry_guard', 'character_not_active') end
+        return false
+    end
     local evidence = normalizeEvidence(code, payload)
     if isExempt(sourceId, code, evidence) then
         if MZBan.DetectorHealth then MZBan.DetectorHealth.Discard('telemetry_guard', 'authorized_action') end
@@ -224,6 +241,10 @@ end
 local function sampleMovement(sourceId, currentMs)
     if not online(sourceId) then return end
     sourceId = math.floor(tonumber(sourceId))
+    if not hasActiveCharacter(sourceId) then
+        movementStates[sourceId], spawnGraceUntil[sourceId] = nil, nil
+        return
+    end
     local coords, ped = coordsOfPlayer(sourceId)
     if not coords then return end
     local bucket = tonumber(GetPlayerRoutingBucket(sourceId)) or 0

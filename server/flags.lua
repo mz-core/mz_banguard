@@ -194,6 +194,9 @@ function MZBan.Flags.FlagPlayer(src, reason, points, evidence, createdByResource
         0,
         { count = 0 }
     ) or {}
+    local labSubject = MZBan.Lab and type(MZBan.Lab.IsSubject) == 'function'
+        and MZBan.Lab.IsSubject(src) == true
+    if labSubject then evidencePayload.lab = true end
 
     MZBan.DB.SaveFlag({
         player_name = playerName,
@@ -240,32 +243,22 @@ function MZBan.Flags.FlagPlayer(src, reason, points, evidence, createdByResource
         MZBan.Webhook.Field('Evidência', MZBan.JsonEncode(evidencePayload), false)
     }
 
-    if Config.Risk.AutoBan and state.score >= (Config.Risk.BanAt or 150) then
-        local ban, createError = MZBan.Bans.Create({
-            player_name = playerName,
-            reason = 'AutoBan por score alto: ' .. tostring(state.score) .. ' | último motivo: ' .. reason,
-            evidence = MZBan.JsonEncode(evidencePayload),
-            banned_by = 'mz_banguard',
-            banned_by_identifier = 'system:mz_banguard',
-            identifiers = identifiers,
-            tokens = MZBan.GetPlayerTokensSafe(src),
-            expires_at = nil
-        })
-        if not ban then
-            MZBan.Log('AutoBan persistence failed:', createError or 'unknown')
-            return false, 'autoban_persistence_failed', state.score
+    -- O score legado continua informativo, mas nao executa punicao sem um
+    -- incidente validado pelo motor unificado.
+    if not labSubject and ((Config.Risk.AutoBan == true and state.score >= (Config.Risk.BanAt or 150))
+        or (Config.Risk.AutoKick == true and state.score >= (Config.Risk.KickAt or 110))) then
+        local legacyAutomationMeta = {
+            source = src, score = state.score, reason = reason,
+            required_flow = 'MZBan.Enforcement.Process'
+        }
+        if type(MZBan.AuditPrint) == 'function' then
+            MZBan.AuditPrint('security.legacy_score_automation.blocked', MZBan.JsonEncode(legacyAutomationMeta))
         end
-
-        MZBan.Webhook.Send('AutoBan', '⛔ MZ BanGuard: autoban aplicado', 'AutoBan por score alto.', fields, 'danger')
-        CreateThread(function() MZBan.Cloud.ReportBan(ban) end)
-        DropPlayer(src, MZBan.Bans.FormatKickMessage(ban))
-        return true, 'autoban', state.score
-    end
-
-    if Config.Risk.AutoKick == true and state.score >= (Config.Risk.KickAt or 110) then
-        MZBan.Webhook.Send('RiskKick', '⚠️ MZ BanGuard: kick por score alto', 'Jogador atingiu limite de kick por risco.', fields, 'danger')
-        DropPlayer(src, 'Você foi removido por comportamento suspeito. Código de revisão: MZ-RISK')
-        return true, 'kick', state.score
+        if MZBan.DB and type(MZBan.DB.Audit) == 'function' then
+            pcall(MZBan.DB.Audit, 'security.legacy_score_automation.blocked', {
+                actor_name = 'mz_banguard', target_source = src, meta = legacyAutomationMeta
+            })
+        end
     end
 
     if state.score >= (Config.Risk.ReviewAt or 70) then
@@ -274,7 +267,7 @@ function MZBan.Flags.FlagPlayer(src, reason, points, evidence, createdByResource
         MZBan.Webhook.Send('RiskAlert', '⚠️ MZ BanGuard: alerta de risco', 'Jogador acumulou suspeitas.', fields, 'warning')
     end
 
-    return true, 'flagged', state.score
+    return true, labSubject and 'flagged_lab_no_punishment' or 'flagged', state.score
 end
 
 exports('FlagPlayer', function(src, reason, points, evidence)

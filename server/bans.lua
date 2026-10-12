@@ -24,6 +24,16 @@ function MZBan.Bans.GetByPublicId(publicId)
     )
 end
 
+function MZBan.Bans.FindActiveByIncidentId(incidentId)
+    incidentId = tostring(incidentId or ''):gsub('[^%w%-]', ''):sub(1, 64)
+    if incidentId == '' then return nil end
+    return MySQL.single.await([[
+        SELECT * FROM mz_bans
+        WHERE active = 1 AND evidence LIKE ?
+        ORDER BY created_at DESC LIMIT 1
+    ]], { '%"incident_id":"' .. incidentId .. '"%' })
+end
+
 function MZBan.Bans.ToPublicDto(ban)
     if type(ban) ~= 'table' then return nil end
     local evidence = ban.evidence
@@ -279,13 +289,11 @@ function MZBan.Bans.CheckLocal(identifiers, tokens)
         )
 
         if ban then
-            if MZBan.Bans.ExpireIfNeeded(ban) then
-                return nil
+            if not MZBan.Bans.ExpireIfNeeded(ban) then
+                ban.match_type = identifierType
+                ban.match_value = value
+                return ban
             end
-
-            ban.match_type = identifierType
-            ban.match_value = value
-            return ban
         end
     end
 
@@ -304,13 +312,11 @@ function MZBan.Bans.CheckLocal(identifiers, tokens)
             )
 
             if ban then
-                if MZBan.Bans.ExpireIfNeeded(ban) then
-                    return nil
+                if not MZBan.Bans.ExpireIfNeeded(ban) then
+                    ban.match_type = 'token'
+                    ban.match_value = token
+                    return ban
                 end
-
-                ban.match_type = 'token'
-                ban.match_value = token
-                return ban
             end
         end
     end

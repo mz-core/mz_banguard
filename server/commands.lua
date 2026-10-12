@@ -56,6 +56,18 @@ local function resolveCitizenId(sourceId)
     return citizenid:sub(1, 64)
 end
 
+local function sameTargetIdentity(sourceId, citizenid, identifiers)
+    if citizenid and resolveCitizenId(sourceId) ~= citizenid then return false end
+    local current = MZBan.GetIdentifiers(sourceId, { includeIp = false })
+    local expectedByType = type(identifiers) == 'table' and identifiers.byType or {}
+    local currentByType = type(current) == 'table' and current.byType or {}
+    for _, identifierType in ipairs({ 'license', 'fivem' }) do
+        local expected = tostring(expectedByType[identifierType] or '')
+        if expected ~= '' and tostring(currentByType[identifierType] or '') ~= expected then return false end
+    end
+    return true
+end
+
 local function hierarchyAllowed(src, target)
     if src == 0 then return true end
     if tonumber(src) == tonumber(target) then return false, 'self_target' end
@@ -156,7 +168,22 @@ local function createConsoleBan(target, durationArg, reason)
         MZBan.Webhook.Field('Score', tostring(score), true)
     }, 'danger')
     CreateThread(function() MZBan.Cloud.ReportBan(ban) end)
-    DropPlayer(target, MZBan.Bans.FormatKickMessage(ban))
+    if sameTargetIdentity(target, targetCitizenId, identifiers) then
+        DropPlayer(target, MZBan.Bans.FormatKickMessage(ban))
+    else
+        pcall(MZBan.DB.Audit, 'ban.disconnect_not_completed', {
+            actor_source = 0,
+            actor_name = 'console',
+            target_source = target,
+            target_name = targetName,
+            ban_public_id = ban.public_id,
+            meta = {
+                reason = 'identity_mismatch_after_persistence',
+                expected_citizenid = targetCitizenId,
+                current_citizenid = resolveCitizenId(target)
+            }
+        })
+    end
     return ban
 end
 

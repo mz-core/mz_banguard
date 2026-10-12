@@ -219,7 +219,8 @@ expect(score == 30 and err == nil, 'consumer autorizado nao leu score')
 Config.Risk.AutoKick = true
 invokingResource = 'test_detector'
 ok, err, score = exported.FlagPlayer(2, 'teleport', 10, {})
-expect(ok == true and err == 'kick' and score == 40, 'AutoKick=true nao respeitou KickAt')
-expect(droppedPlayers == 1, 'AutoKick=true nao executou exatamente um kick')
+expect(ok == true and err == 'flagged' and score == 40,
+    'score legado nao permaneceu informativo com AutoKick habilitado')
+expect(droppedPlayers == 0, 'score legado contornou o motor unificado e executou kick')
 
 print('mz_banguard risk export access harness: PASS')

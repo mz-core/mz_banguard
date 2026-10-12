@@ -40,7 +40,7 @@ Todos os exports de integração retornam:
 }
 ```
 
-Falhas de resource, schema, permissão, alvo, hierarquia, duração, motivo ou persistência retornam `ok=false`. Consumidores não devem inferir sucesso pela ausência de exceção.
+Falhas de resource, schema, permissão, alvo, hierarquia, duração, motivo ou persistência retornam `ok=false`. Consumidores não devem inferir sucesso pela ausência de exceção. Depois do commit, `data.disconnectRequested=false` informa que o ban foi confirmado, mas a desconexão foi cancelada/falhou; `data.disconnectReason` preserva a causa real.
 
 ## Criar ban online
 
@@ -49,7 +49,8 @@ local response = exports['mz_banguard']:CreateOnlineBan(
   actorSource,
   targetSource,
   '7d', -- perm, Nm, Nh ou Nd
-  'motivo com 3 a 256 caracteres'
+  'motivo com 3 a 256 caracteres',
+  expectedCitizenid
 )
 ```
 
@@ -64,9 +65,11 @@ O BanGuard revalida no servidor:
 - duração máxima de 3650 dias;
 - motivo;
 - license obrigatória;
+- `expectedCitizenid` obrigatório para o caller `mz_admin`;
+- CitizenID e identifiers estáveis antes da transação e antes da desconexão;
 - existência de ban local ativo.
 
-Ban, identifiers, tokens e auditoria `ban.created.integration` são gravados na mesma transação. Somente depois do commit são disparados webhook/cloud e `DropPlayer`. Falha transacional não remove o alvo.
+Ban, identifiers, tokens e auditoria `ban.created.integration` são gravados na mesma transação. Somente depois do commit são disparados webhook/cloud e, se a identidade ainda corresponder, `DropPlayer`. Falha transacional não remove o alvo; source reutilizado após o commit preserva o ban verdadeiro e registra que a desconexão não foi concluída.
 
 ## Revogar
 

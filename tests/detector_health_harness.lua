@@ -6,6 +6,7 @@ end
 
 local timer = 1000
 local events, handlers = {}, {}
+local presenceIncidents = {}
 
 Config = {
     DetectorHealth = {
@@ -13,13 +14,20 @@ Config = {
         ruleVersion = 'test-1',
         heartbeatIntervalMs = 15000,
         heartbeatMissingMs = 10000,
-        cleanupIntervalMs = 10000
+        cleanupIntervalMs = 10000,
+        watchedResources = { mz_banguard = true, mz_inventory = true }
     }
 }
-MZBan = {}
+MZBan = {
+    Incidents = {
+        Record = function(input) presenceIncidents[#presenceIncidents + 1] = input return input end,
+        NotifyStaff = function() end
+    }
+}
 
 function GetGameTimer() return timer end
 function GetPlayerPing(sourceId) return tonumber(sourceId) == 7 and 42 or 0 end
+function GetPlayerName(sourceId) return tonumber(sourceId) == 7 and 'Player Seven' or nil end
 function GetPlayers() return { '7' } end
 function RegisterNetEvent(name, callback) events[name] = callback end
 function AddEventHandler(name, callback) handlers[name] = callback end
@@ -30,9 +38,17 @@ dofile('mz_banguard/server/detector_health.lua')
 
 source = 7
 events['mz_banguard:server:sensorHeartbeat']('test-1', 1)
+events['mz_banguard:server:resourceHeartbeat']('mz_inventory', 'inventory-1', 1)
 local status = MZBan.DetectorHealth.Status()
 check(status.ruleVersion == 'test-1', 'rule version missing')
 check(status.sensors.present == 1 and status.sensors.missing == 0, 'valid heartbeat not present')
+check(status.sensors.resources.mz_inventory.present == 1,
+    'resource-specific presence heartbeat was not tracked')
+
+events['mz_banguard:server:resourceStopObserved']('mz_inventory')
+check(#presenceIncidents == 1 and presenceIncidents[1].code == 'client_resource_stop_observed'
+    and presenceIncidents[1].culpability == 'none',
+    'client resource stop telemetry became authority or was not recorded')
 
 events['mz_banguard:server:sensorHeartbeat']('test-1', 1)
 status = MZBan.DetectorHealth.Status()

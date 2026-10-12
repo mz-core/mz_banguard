@@ -56,6 +56,45 @@ local expected = {
             'PRIMARY', 'idx_mz_ban_flags_primary', 'idx_mz_ban_flags_reason',
             'idx_mz_ban_flags_created', 'idx_mz_ban_flags_score'
         }
+    },
+    mz_security_incidents = {
+        columns = {
+            'incident_id', 'code', 'category', 'status', 'severity', 'confidence', 'risk_score',
+            'player_name', 'citizenid', 'account_id', 'session_id', 'first_seen_at', 'last_seen_at',
+            'count', 'suppressed_count', 'source_at_first_seen', 'source_at_last_seen', 'summary_json',
+            'evidence_json', 'timeline_snapshot_json', 'mitigation_json', 'lab', 'created_at', 'updated_at',
+            'resolved_at', 'resolved_by', 'false_positive_at', 'false_positive_by'
+        },
+        indexes = {
+            'PRIMARY', 'idx_mz_security_incidents_status_updated', 'idx_mz_security_incidents_citizen',
+            'idx_mz_security_incidents_account', 'idx_mz_security_incidents_code_last_seen',
+            'idx_mz_security_incidents_severity'
+        }
+    },
+    mz_security_signals = {
+        columns = {
+            'id', 'signal_id', 'incident_id', 'code', 'origin', 'confidence', 'culpability',
+            'citizenid', 'account_id', 'session_id', 'source_id', 'occurred_at', 'evidence_json'
+        },
+        indexes = {
+            'PRIMARY', 'uniq_mz_security_signal_id', 'idx_mz_security_signals_incident',
+            'idx_mz_security_signals_session', 'idx_mz_security_signals_citizen',
+            'idx_mz_security_signals_account', 'idx_mz_security_signals_code_time'
+        }
+    },
+    mz_security_incident_actions = {
+        columns = { 'id', 'incident_id', 'action', 'actor_citizenid', 'actor_name', 'note', 'meta_json', 'created_at' },
+        indexes = { 'PRIMARY', 'idx_mz_security_actions_incident', 'idx_mz_security_actions_created' }
+    },
+    mz_security_lab_subjects = {
+        columns = {
+            'id', 'citizenid', 'account_id', 'session_id', 'enabled', 'started_at', 'expires_at',
+            'reason', 'authorized_by', 'created_at', 'updated_at'
+        },
+        indexes = {
+            'PRIMARY', 'uniq_mz_security_lab_session', 'idx_mz_security_lab_citizen',
+            'idx_mz_security_lab_account', 'idx_mz_security_lab_active_expiry'
+        }
     }
 }
 
@@ -146,7 +185,7 @@ function Wait() end
 dofile('mz_banguard/server/db.lua')
 
 MZBan.DB.Init()
-expect(createCount == 6, 'banco vazio nao criou exatamente as seis tabelas')
+expect(createCount == 10, 'banco vazio nao criou exatamente as dez tabelas')
 expect(alterCount == 0, 'bootstrap de banco vazio executou ALTER')
 expect(deleteCount == 0, 'bootstrap executou retencao/descarte')
 

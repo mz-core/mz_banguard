@@ -73,6 +73,14 @@ function MZBan.AlertsAPI.Get(actorSource, id, includeIdentifiers, invokingResour
     return result(true, { incident = MZBan.Incidents.ToDto(incident, { details = true, identifiers = identifiersAllowed }) })
 end
 
+function MZBan.AlertsAPI.SessionTimeline(actorSource, sessionId, limit, invokingResource)
+    local allowed, actorOrError = validate(actorSource, invokingResource, 'details')
+    if not allowed then return result(false, nil, actorOrError) end
+    local timeline, err = MZBan.Incidents.SessionTimeline(sessionId, limit)
+    if not timeline then return result(false, nil, err) end
+    return result(true, timeline)
+end
+
 function MZBan.AlertsAPI.Acknowledge(actorSource, id, invokingResource)
     local allowed, actorOrError = validate(actorSource, invokingResource, 'acknowledge')
     if not allowed then return result(false, nil, actorOrError) end
@@ -95,6 +103,30 @@ function MZBan.AlertsAPI.SetStatus(actorSource, id, status, invokingResource)
     local incident, err = MZBan.Incidents.SetStatus(actorOrError, id, status)
     if not incident then return result(false, nil, err) end
     return result(true, { incident = MZBan.Incidents.ToDto(incident, { details = true }) })
+end
+
+function MZBan.AlertsAPI.ExportEvidence(actorSource, id, format, invokingResource)
+    local allowed, actorOrError = validate(actorSource, invokingResource, 'details')
+    if not allowed then return result(false, nil, actorOrError) end
+    local content, mimeType, filename = MZBan.Incidents.Export(id, format)
+    if not content then return result(false, nil, mimeType) end
+    MZBan.Incidents.AuditAccess(actorOrError, id, 'security.incident.evidence_exported', {
+        result = 'exported', format = tostring(format or 'json'), invokingResource = invokingResource
+    })
+    return result(true, { content = content, mimeType = mimeType, filename = filename })
+end
+
+function MZBan.AlertsAPI.SetLabSubject(actorSource, targetSource, enabled, durationSeconds, reason, invokingResource)
+    local allowed, actorOrError = validate(actorSource, invokingResource, 'lab')
+    if not allowed then return result(false, nil, actorOrError) end
+    if not MZBan.Lab or type(MZBan.Lab.Set) ~= 'function' then return result(false, nil, 'lab_unavailable') end
+    local cfg = type(Config.LabMode) == 'table' and Config.LabMode or {}
+    if cfg.enabled == false then return result(false, nil, 'lab_disabled') end
+    durationSeconds = math.floor(tonumber(durationSeconds) or tonumber(cfg.defaultDurationSeconds) or 3600)
+    durationSeconds = math.max(60, math.min(tonumber(cfg.maximumDurationSeconds) or 86400, durationSeconds))
+    local subject, err = MZBan.Lab.Set(actorOrError, targetSource, enabled == true, durationSeconds, reason)
+    if not subject then return result(false, nil, err) end
+    return result(true, { subject = subject })
 end
 
 function MZBan.AlertsAPI.PrepareAction(actorSource, id, action, invokingResource)
@@ -128,6 +160,10 @@ exports('GetSecurityIncident', function(actorSource, id, includeIdentifiers)
     return MZBan.AlertsAPI.Get(actorSource, id, includeIdentifiers, GetInvokingResource())
 end)
 
+exports('GetSecuritySessionTimeline', function(actorSource, sessionId, limit)
+    return MZBan.AlertsAPI.SessionTimeline(actorSource, sessionId, limit, GetInvokingResource())
+end)
+
 exports('AcknowledgeSecurityIncident', function(actorSource, id)
     return MZBan.AlertsAPI.Acknowledge(actorSource, id, GetInvokingResource())
 end)
@@ -138,6 +174,16 @@ end)
 
 exports('SetSecurityIncidentStatus', function(actorSource, id, status)
     return MZBan.AlertsAPI.SetStatus(actorSource, id, status, GetInvokingResource())
+end)
+
+exports('ExportSecurityIncidentEvidence', function(actorSource, id, format)
+    return MZBan.AlertsAPI.ExportEvidence(actorSource, id, format, GetInvokingResource())
+end)
+
+exports('SetSecurityLabSubject', function(actorSource, targetSource, enabled, durationSeconds, reason)
+    return MZBan.AlertsAPI.SetLabSubject(
+        actorSource, targetSource, enabled, durationSeconds, reason, GetInvokingResource()
+    )
 end)
 
 exports('PrepareSecurityIncidentAction', function(actorSource, id, action)

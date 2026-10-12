@@ -13,6 +13,7 @@ precisa de contrato server-side antes de qualquer bloqueio preventivo.
 | `mz_core` | spawn/carregamento do personagem | `player.model.change` | hash exato do modelo e um uso |
 | `mz_core` | spawn/carregamento do personagem | `movement.teleport` | coordenadas de destino e quatro amostras |
 | `mz_core` | spawn/carregamento do personagem | lifecycle `character_spawn` | modelo, destino, bucket e confirmacao server-side |
+| `mz_core` identity | seleção sem personagem ativo | guard canônico de telemetry/movement | rejeita sinais de gameplay durante `CHARACTER_SELECTION` |
 | `mz_creator` | criacao/aparencia | lifecycle `character_creation` | modelos permitidos, destino, retorno e bucket |
 | `mz_clothing` | loja de roupas | lifecycle `cosmetic_session` | modelo atual, bucket, loja e distancia validados |
 | `mz_tatto` | loja/comando de tatuagem | lifecycle `cosmetic_session` | modelo atual, bucket, permissao ou distancia |

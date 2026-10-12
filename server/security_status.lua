@@ -22,8 +22,18 @@ function MZBan.Security.Status()
     end
 
     local weapon = MZBan.WeaponGuard and MZBan.WeaponGuard.Status and MZBan.WeaponGuard.Status() or {}
-    local risk = type(Config.Risk) == 'table' and Config.Risk or {}
+    local entityConfig = type(Config.EntityGuard) == 'table' and Config.EntityGuard or {}
+    local entityMitigationActive = (entityConfig.mode == 'mitigate' or entityConfig.mode == 'enforce')
+        and entityConfig.cancelHighConfidence == true and entityConfig.runtimeValidated == true
+    local mitigationActive = weapon.mitigationActive == true or entityMitigationActive
     local enforcementActive = weapon.enforcementActive == true
+        or (entityMitigationActive and entityConfig.mode == 'enforce')
+    local restricted = false
+    for _, module in pairs(modules) do
+        if module.enabled and module.mode == 'restricted' then restricted = true break end
+    end
+    local activeMode = enforcementActive and 'enforce'
+        or (mitigationActive and 'mitigate' or (restricted and 'restricted' or 'detect-only'))
     local health = MZBan.DetectorHealth and type(MZBan.DetectorHealth.Status) == 'function'
         and MZBan.DetectorHealth.Status() or { enabled = false }
     local leases = MZBan.SecurityLeases and type(MZBan.SecurityLeases.Status) == 'function'
@@ -38,15 +48,35 @@ function MZBan.Security.Status()
         and MZBan.Correlation.Status() or { enabled = false }
     local aim = MZBan.AimGuard and type(MZBan.AimGuard.Status) == 'function'
         and MZBan.AimGuard.Status() or {}
+    local lab = MZBan.Lab and type(MZBan.Lab.Status) == 'function'
+        and MZBan.Lab.Status() or { active = 0 }
+    local enforcement = MZBan.Enforcement and type(MZBan.Enforcement.Status) == 'function'
+        and MZBan.Enforcement.Status() or {
+            resolvedDefaultMode = 'passive', automaticKickEnabled = false, automaticBanEnabled = false
+        }
+    local persistence = MZBan.Incidents and type(MZBan.Incidents.PersistenceStatus) == 'function'
+        and MZBan.Incidents.PersistenceStatus() or { pendingIncidents = 0, pendingSignals = 0 }
+    local policyMitigationActive = enforcement.resolvedDefaultMode ~= 'passive'
+    local policyPunishmentActive = enforcement.resolvedDefaultMode == 'kick'
+        or enforcement.resolvedDefaultMode == 'ban'
+    for _, detector in pairs(type(enforcement.detectors) == 'table' and enforcement.detectors or {}) do
+        if detector.resolvedMode ~= 'passive' then policyMitigationActive = true end
+        if detector.resolvedMode == 'kick' or detector.resolvedMode == 'ban' then policyPunishmentActive = true end
+    end
+    mitigationActive = mitigationActive or policyMitigationActive
+    enforcementActive = enforcementActive or (policyPunishmentActive
+        and (enforcement.automaticKickEnabled == true or enforcement.automaticBanEnabled == true))
     return {
         enabled = true,
-        mode = enforcementActive and 'enforce' or 'observe',
+        mode = enforcement.resolvedDefaultMode or activeMode,
         cancelHighConfidence = weapon.cancelHighConfidence == true,
         runtimeValidated = weapon.runtimeValidated == true,
         enforcementActive = enforcementActive,
-        autoKick = risk.AutoKick == true,
-        autoBan = risk.AutoBan == true,
-        alertOnly = not enforcementActive and risk.AutoKick ~= true and risk.AutoBan ~= true,
+        mitigationActive = mitigationActive,
+        autoKick = enforcement.automaticKickEnabled == true,
+        autoBan = enforcement.automaticBanEnabled == true,
+        alertOnly = enforcement.resolvedDefaultMode == 'passive'
+            and enforcement.automaticKickEnabled ~= true and enforcement.automaticBanEnabled ~= true,
         ruleVersion = health.ruleVersion,
         modules = modules,
         infrastructure = {
@@ -56,7 +86,14 @@ function MZBan.Security.Status()
             eventContracts = contracts,
             correlation = correlation,
             detectorHealth = health,
-            aimAnalytics = aim
-        }
+            aimAnalytics = aim,
+            lab = lab,
+            incidentPersistence = {
+                enabled = Config.IncidentPersistence and Config.IncidentPersistence.enabled ~= false,
+                pendingIncidents = persistence.pendingIncidents,
+                pendingSignals = persistence.pendingSignals
+            }
+        },
+        enforcement = enforcement
     }
 end

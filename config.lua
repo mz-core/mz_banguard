@@ -1,6 +1,6 @@
 Config = {}
 
-Config.Version = '1.4.1'
+Config.Version = '1.6.0'
 Config.Debug = false
 
 Config.Permissions = {
@@ -34,12 +34,15 @@ Config.Database = {
         SeenDays = 90,
         AuditDays = 180,
         FlagsDays = 180,
+        IncidentsDays = 365,
+        SignalsDays = 90,
         RunEveryHours = 12
     }
 }
 
 Config.Integration = {
     CoreResource = 'mz_core',
+    InventoryResource = 'mz_inventory',
     TrustedResources = {
         mz_admin = true,
         mz_banguard = true
@@ -226,6 +229,22 @@ Config.Risk = {
     }
 }
 
+-- Politica canonica de atuacao. Os modos de detector abaixo substituem a
+-- decisao dispersa de punicao, mas preservam as travas tecnicas dos guards.
+Config.Enforcement = {
+    DefaultMode = 'passive',
+    AutomaticKickEnabled = false,
+    AutomaticBanEnabled = false,
+    RequireStableIdentity = true,
+    RequireConfirmedEvidence = true,
+    OnMitigationFailure = 'log_only'
+}
+
+-- Overrides opcionais por codigo do DetectorCatalog. Codigos ausentes herdam
+-- Enforcement.DefaultMode. Ative mitigate somente depois da validacao runtime
+-- especifica do guard; kick e ban continuam bloqueados pelas chaves globais.
+Config.DetectorActions = {}
+
 -- Autorizacoes server-only, curtas e consumiveis. O export legado
 -- RegisterTrustedAction e traduzido para este contrato.
 Config.SecurityLeases = {
@@ -236,21 +255,41 @@ Config.SecurityLeases = {
     cleanupIntervalMs = 5000,
     audit = true,
     capabilities = {
-        ['movement.teleport'] = { ttlMs = 10000, maxTtlMs = 30000, uses = 4, issuers = {
-            mz_admin = true, mz_core = true
-        } },
+        ['movement.teleport'] = {
+            ttlMs = 10000,
+            maxTtlMs = 30000,
+            uses = 4,
+            issuers = {
+                mz_admin = true, mz_core = true
+            }
+        },
         ['movement.noclip.staff'] = { ttlMs = 10000, maxTtlMs = 15000, uses = 8, issuers = { mz_admin = true } },
         ['camera.spectate.staff'] = { ttlMs = 10000, maxTtlMs = 15000, uses = 8, issuers = { mz_admin = true } },
-        ['player.invincibility'] = { ttlMs = 8000, maxTtlMs = 15000, uses = 4, issuers = {
-            mz_admin = true
-        } },
-        ['player.model.change'] = { ttlMs = 8000, maxTtlMs = 15000, uses = 2, issuers = {
-            mz_core = true
-        } },
+        ['player.invincibility'] = {
+            ttlMs = 8000,
+            maxTtlMs = 15000,
+            uses = 4,
+            issuers = {
+                mz_admin = true
+            }
+        },
+        ['player.model.change'] = {
+            ttlMs = 8000,
+            maxTtlMs = 15000,
+            uses = 2,
+            issuers = {
+                mz_core = true
+            }
+        },
         ['entity.spawn.ped'] = { ttlMs = 5000, maxTtlMs = 15000, uses = 16, issuers = {} },
-        ['entity.spawn.vehicle'] = { ttlMs = 5000, maxTtlMs = 15000, uses = 8, issuers = {
-            mz_admin = true
-        } },
+        ['entity.spawn.vehicle'] = {
+            ttlMs = 5000,
+            maxTtlMs = 15000,
+            uses = 8,
+            issuers = {
+                mz_admin = true
+            }
+        },
         ['entity.spawn.object'] = { ttlMs = 5000, maxTtlMs = 15000, uses = 32, issuers = {} },
         ['event.clear_tasks.remote'] = { ttlMs = 3000, maxTtlMs = 8000, uses = 2, issuers = {} },
         ['weapon.give.remote'] = { ttlMs = 3000, maxTtlMs = 8000, uses = 2, issuers = {} },
@@ -275,24 +314,33 @@ Config.SecurityLifecycle = {
             ttlMs = 45000,
             issuers = { mz_core = true },
             transitions = {
-                movement = true, model = true, camera = true,
-                invincibility = true, invisibility = true
+                movement = true,
+                model = true,
+                camera = true,
+                invincibility = true,
+                invisibility = true
             }
         },
         respawn = {
             ttlMs = 20000,
             issuers = { mz_banguard = true },
             transitions = {
-                movement = true, model = true, camera = true,
-                invincibility = true, invisibility = true
+                movement = true,
+                model = true,
+                camera = true,
+                invincibility = true,
+                invisibility = true
             }
         },
         character_creation = {
             ttlMs = 300000,
             issuers = { mz_creator = true },
             transitions = {
-                movement = true, model = true, camera = true,
-                invincibility = true, invisibility = true
+                movement = true,
+                model = true,
+                camera = true,
+                invincibility = true,
+                invisibility = true
             }
         },
         cosmetic_session = {
@@ -366,7 +414,8 @@ Config.EventContracts = {
         ['lifecycle.clothing.open'] = {
             sourceOnline = true,
             schema = {
-                type = 'table', allowExtra = false,
+                type = 'table',
+                allowExtra = false,
                 fields = {
                     shopId = { type = 'string', required = true, maxLength = 64 },
                     securityLifecycleId = { type = 'string', required = false, maxLength = 96 }
@@ -376,7 +425,8 @@ Config.EventContracts = {
         ['lifecycle.tattoo.open'] = {
             sourceOnline = true,
             schema = {
-                type = 'table', allowExtra = false,
+                type = 'table',
+                allowExtra = false,
                 fields = {
                     shopId = { type = 'string', required = true, maxLength = 64 },
                     gender = { type = 'string', required = false, maxLength = 16 },
@@ -388,7 +438,8 @@ Config.EventContracts = {
         ['lifecycle.house.enter'] = {
             sourceOnline = true,
             schema = {
-                type = 'table', allowExtra = false,
+                type = 'table',
+                allowExtra = false,
                 fields = {
                     houseCode = { type = 'string', required = false, maxLength = 64 },
                     code = { type = 'string', required = false, maxLength = 64 }
@@ -398,7 +449,8 @@ Config.EventContracts = {
         ['lifecycle.house.confirm'] = {
             sourceOnline = true,
             schema = {
-                type = 'table', allowExtra = false,
+                type = 'table',
+                allowExtra = false,
                 fields = {
                     houseCode = { type = 'string', required = false, maxLength = 64 },
                     code = { type = 'string', required = false, maxLength = 64 }
@@ -416,13 +468,16 @@ Config.EventContracts = {
         ['lifecycle.interiors.calibration.result'] = {
             sourceOnline = true,
             schema = {
-                type = 'table', allowExtra = false,
+                type = 'table',
+                allowExtra = false,
                 fields = {
                     phase = { type = 'string', required = true, maxLength = 8 },
                     lifecycleId = { type = 'string', required = false, maxLength = 96 },
                     success = { type = 'boolean', required = true },
                     error = {
-                        type = 'string', required = false, maxLength = 64,
+                        type = 'string',
+                        required = false,
+                        maxLength = 64,
                         pattern = '^[a-z0-9_]+$'
                     }
                 }
@@ -431,7 +486,8 @@ Config.EventContracts = {
         ['lifecycle.interiors.calibration.report'] = {
             sourceOnline = true,
             schema = {
-                type = 'table', allowExtra = false,
+                type = 'table',
+                allowExtra = false,
                 fields = {
                     code = { type = 'string', required = true, maxLength = 64, pattern = '^[a-z0-9_]+$' },
                     x = { type = 'number', required = true, min = -20000, max = 20000 },
@@ -449,18 +505,61 @@ Config.EventContracts = {
 
 Config.SecurityCorrelation = {
     enabled = true,
-    ttlMs = 120000,
+    ttlMs = 30000,
     maxEntriesPerPlayer = 32,
+    snapshotEntries = 16,
+    labTtlMs = 120000,
+    labMaxEntriesPerPlayer = 96,
+    labSnapshotEntries = 64,
     maxDataKeys = 16,
-    maxString = 128
+    maxString = 128,
+    crashClusterWindowMs = 5000,
+    crashHistoryMs = 15000,
+    crashMinimumVictims = 2,
+    crossSessionLinkWindowSeconds = 86400,
+    -- Sinais que ja originam incidente permanecem na timeline em memoria, mas
+    -- nao sao duplicados no SQL como correlation + raw signal.
+    persistIncidentBacked = false
+}
+
+Config.IncidentPersistence = {
+    enabled = true,
+    hydrateLimit = 1000,
+    updateDebounceMs = 5000,
+    flushIntervalMs = 2000,
+    maxWritesPerMinute = 120,
+    maxEvidenceJsonBytes = 65535,
+    maxTimelineJsonBytes = 65535,
+    maxSummaryJsonBytes = 16384,
+    maxMitigationJsonBytes = 16384,
+    exportMaxBytes = 262144,
+    maxPendingIncidents = 500,
+    maxPendingSignals = 256,
+    signalFlushBatch = 16,
+    retryBaseMs = 1000,
+    rawSignalWindowMs = 10000,
+    rawSignalBurst = 8,
+    rawSignalRepresentativeEvery = 100
+}
+
+Config.LabMode = {
+    enabled = true,
+    defaultDurationSeconds = 3600,
+    maximumDurationSeconds = 86400
+}
+
+Config.SecurityCanaries = {
+    enabled = true,
+    owners = { mz_inventory = 'inventory' }
 }
 
 Config.DetectorHealth = {
     enabled = true,
-    ruleVersion = '1.4.0',
+    ruleVersion = '1.6.0',
     heartbeatIntervalMs = 15000,
     heartbeatMissingMs = 45000,
-    cleanupIntervalMs = 10000
+    cleanupIntervalMs = 10000,
+    watchedResources = { mz_banguard = true, mz_inventory = true }
 }
 
 -- Configuracao comum da Central. Estes limites controlam armazenamento,
@@ -494,6 +593,7 @@ Config.SecurityAlerts = {
         note = 'mz_banguard.alerts.note',
         clear = 'mz_banguard.alerts.clear',
         identifiers = 'mz_banguard.alerts.identifiers',
+        lab = 'mz_banguard.alerts.lab',
         spectate = 'mz_banguard.actions.spectate',
         gotoPlayer = 'mz_banguard.actions.goto',
         kick = 'mz_banguard.actions.kick',
@@ -519,11 +619,17 @@ Config.SecurityAlerts = {
         event_ptfx_rate_suspect = 35,
         event_ptfx_anomaly_suspect = 45,
         event_projectile_rate_suspect = 40,
+        projectile_weapon_unauthorized = 35,
         event_fire_rate_suspect = 35,
         event_fire_remote_suspect = 45,
         event_remote_weapon_action_suspect = 55,
         event_damage_modifier_suspect = 50,
-        aim_headshot_pattern_suspect = 30
+        aim_headshot_pattern_suspect = 30,
+        crash_observed = 20,
+        crash_cluster_suspect = 45,
+        client_resource_presence_missing = 0,
+        client_resource_stop_observed = 0,
+        canary_triggered = 0
     }
 }
 
@@ -534,7 +640,7 @@ Config.WeaponGuard = {
 
     -- MODOS DISPONIVEIS:
     -- 'observe' = recomendado. Registra, agrega e notifica, mas nunca cancela o dano.
-    -- 'enforce' = permite cancelar somente divergencias de alta confianca e apenas
+    -- 'mitigate'/'enforce' = permite cancelar somente divergencias de alta confianca e apenas
     --             quando cancelHighConfidence e runtimeValidated tambem forem true.
     mode = 'observe',
 
@@ -595,6 +701,7 @@ Config.WeaponGuard = {
         weapon_damage_unknown_hash = 25,
         weapon_damage_payload_invalid = 20,
         weapon_damage_rate_suspect = 25,
+        weapon_damage_death_state_incompatible = 55,
         weapon_damage_session_not_ready = 0,
         weapon_damage_transition_window = 0
     },
@@ -607,12 +714,13 @@ Config.WeaponGuard = {
         'WEAPON_SNIPERRIFLE',
         'WEAPON_MG',
         'WEAPON_RPG'
-    }
+    },
+    unarmedWeaponNames = { 'WEAPON_UNARMED' }
 }
 
 Config.EntityGuard = {
-    -- MODOS: enabled=false desliga; observe somente alerta; enforce fica
-    -- reservado para cancelamento futuro. Nesta entrega nao existe CancelEvent.
+    -- MODOS: observe/restricted somente registram; mitigate/enforce podem cancelar
+    -- entityCreating de alta confianca somente com as duas travas abaixo.
     enabled = true,
     mode = 'observe',
     cancelHighConfidence = false,
@@ -681,6 +789,7 @@ Config.EventGuard = {
     mode = 'observe',
     cancelHighConfidence = false,
     runtimeValidated = false,
+    projectileAuthorityEnabled = true,
     windows = {
         explosionMs = 10000,
         clearTasksMs = 10000,

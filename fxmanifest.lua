@@ -3,7 +3,7 @@ game 'gta5'
 
 author 'Mazus / MZ'
 description 'MZ BanGuard - local ban, cloud ban intelligence, risk flags and audit for FiveM'
-version '1.4.1'
+version '1.6.0'
 lua54 'yes'
 
 shared_scripts {
@@ -22,13 +22,16 @@ server_scripts {
     'server/db.lua',
     'server/cloud.lua',
     'server/bans.lua',
+    'server/detector_catalog.lua',
+    'server/lab_mode.lua',
     'server/security_correlation.lua',
     'server/detector_health.lua',
     'server/security_leases.lua',
     'server/security_lifecycle.lua',
     'server/event_contracts.lua',
-    'server/flags.lua',
     'server/incidents.lua',
+    'server/enforcement.lua',
+    'server/flags.lua',
     'server/weapon_guard.lua',
     'server/entity_classification.lua',
     'server/entity_guard.lua',
@@ -42,4 +45,8 @@ server_scripts {
     'server/main.lua'
 }
 
-dependency 'oxmysql'
+dependencies {
+    'oxmysql',
+    'mz_core',
+    'mz_inventory'
+}

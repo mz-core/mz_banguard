@@ -13,7 +13,7 @@ end
 
 dofile('mz_banguard/config.lua')
 
-check(Config.Version == '1.4.1', 'config version is not 1.4.1')
+check(Config.Version == '1.6.0', 'config version is not 1.6.0')
 check(Config.Risk.AutoKick == false and Config.Risk.AutoBan == false, 'automatic punishment is enabled')
 for _, section in ipairs({ 'WeaponGuard', 'EntityGuard', 'MovementGuard', 'PlayerStateGuard', 'EventGuard', 'AimGuard' }) do
     check(Config[section].enabled == true and Config[section].mode == 'observe', section .. ' is not observing')
@@ -59,7 +59,7 @@ local clothingServer = read('mz_clothing/server/main.lua')
 local tattooCallbacks = read('mz_tatto/server/callbacks.lua')
 local housesMain = read('mz_houses/server/main.lua')
 local interiorsServer = read('mz_interiors/server/main.lua')
-check(adminMain:find("'movement.teleport'", 1, true) ~= nil, 'goto/bring lease integration missing')
+check((adminMain .. adminSecurity):find("'movement.teleport'", 1, true) ~= nil, 'goto/bring lease integration missing')
 check(adminSecurity:find("'entity.spawn.vehicle'", 1, true) ~= nil, 'staff vehicle lease integration missing')
 check(coreMain:find("'player.model.change'", 1, true) ~= nil, 'core model lease integration missing')
 check(coreMain:find("'movement.teleport'", 1, true) ~= nil, 'core spawn teleport lease integration missing')
@@ -83,8 +83,13 @@ check(interiorsServer:find("'lifecycle.interiors.calibration.report'", 1, true) 
 check(Config.EventContracts.contracts['lifecycle.interiors.calibration.report'] ~= nil,
     'BanGuard calibration report schema missing')
 
+local entityGuard = read('mz_banguard/server/entity_guard.lua')
+check(entityGuard:find('CancelEvent', 1, true) ~= nil
+    and entityGuard:find('enforcement = enforcement', 1, true) ~= nil
+    and entityGuard:find('guard.runtimeValidated ~= true', 1, true) ~= nil,
+    'entityCreating mitigation is not delegated to unified enforcement with runtime validation')
+
 local guardFiles = {
-    'mz_banguard/server/entity_guard.lua',
     'mz_banguard/server/telemetry_guard.lua',
     'mz_banguard/server/event_guard.lua',
     'mz_banguard/server/aim_guard.lua'

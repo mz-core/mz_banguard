@@ -88,7 +88,7 @@ local function leaseFor(sourceId, kind, context)
     return MZBan.SecurityLeases.Consume(sourceId, 'entity.spawn.' .. kind, context)
 end
 
-local function recordIncident(sourceId, code, kind, reason, evidence, confidence)
+local function recordIncident(sourceId, code, kind, reason, evidence, confidence, enforcement)
     local incident = MZBan.Incidents.Record({
         source = sourceId,
         playerName = GetPlayerName(sourceId),
@@ -97,10 +97,35 @@ local function recordIncident(sourceId, code, kind, reason, evidence, confidence
         confidence = confidence or 'high',
         subject = ('%s:%s:%s'):format(kind, tostring(evidence.populationClass or 'unknown'), tostring(evidence.bucket or 0)),
         reason = reason,
-        evidence = evidence
+        evidence = evidence,
+        enforcement = enforcement
     })
     if incident then MZBan.Incidents.NotifyStaff(incident) end
     return incident
+end
+
+local function mitigationCapability(sourceId, phase, blocked, rateExceeded, confidence)
+    local guard = config()
+    if phase ~= 'creating' then
+        return { supported = false, reason = 'entity_already_created', resource = GetCurrentResourceName() }
+    end
+    if MZBan.Lab and type(MZBan.Lab.IsSubject) == 'function' and MZBan.Lab.IsSubject(sourceId) == true then
+        return { supported = false, reason = 'lab_mode', resource = GetCurrentResourceName() }
+    end
+    if blocked ~= true and not (rateExceeded == true and confidence == 'high') then
+        return { supported = false, reason = 'entity_evidence_not_high_confidence', resource = GetCurrentResourceName() }
+    end
+    if guard.cancelHighConfidence ~= true or guard.runtimeValidated ~= true then
+        return { supported = false, reason = 'entity_cancel_runtime_not_validated', resource = GetCurrentResourceName() }
+    end
+    return {
+        supported = true,
+        resource = GetCurrentResourceName(),
+        execute = function()
+            CancelEvent()
+            return true, 'blocked', 'entity_creation_cancelled'
+        end
+    }
 end
 
 local function inspect(entity, phase, attempt)
@@ -179,15 +204,16 @@ local function inspect(entity, phase, attempt)
         mappingVersion = classification.mappingVersion,
         mappingValidated = classification.mappingValidated
     }
+    local enforcement = mitigationCapability(owner, phase, blocked, rateExceeded, classification.confidence)
 
     if blocked then
-        recordIncident(owner, 'entity_model_blocked', kind, 'entity_model_in_server_blocklist', evidence, 'high')
+        recordIncident(owner, 'entity_model_blocked', kind, 'entity_model_in_server_blocklist', evidence, 'high', enforcement)
     end
     if rateExceeded then
         recordIncident(owner, 'entity_spawn_rate_suspect', kind,
             burstCount > burstMaximum and 'scripted_entity_burst_above_observation_limit'
                 or 'scripted_entity_rate_above_observation_limit',
-            evidence, classification.confidence)
+            evidence, classification.confidence, enforcement)
     end
     if MZBan.DetectorHealth then MZBan.DetectorHealth.Seen('entity_guard.' .. tostring(classification.class)) end
 end

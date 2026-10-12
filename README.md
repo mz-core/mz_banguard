@@ -30,11 +30,16 @@ Os ACEs `mzban.*` são preservados para instalações antigas, mas não são exi
 Config.LegacyCommands.RequireLegacyAceForPlayers = true
 ```
 
-## Politica somente de alertas
+## Política de atuação unificada
 
 Durante staging, mantenha:
 
 ```lua
+Config.Enforcement.DefaultMode = 'passive'
+Config.Enforcement.AutomaticKickEnabled = false
+Config.Enforcement.AutomaticBanEnabled = false
+Config.DetectorActions = {}
+
 Config.Risk.AutoKick = false
 Config.Risk.AutoBan = false
 Config.WeaponGuard.mode = 'observe'
@@ -42,7 +47,7 @@ Config.WeaponGuard.cancelHighConfidence = false
 Config.WeaponGuard.runtimeValidated = false
 ```
 
-`KickAt` e `BanAt` podem ser calibrados enquanto as chaves automaticas estao desligadas. Atingir esses scores continua produzindo log/revisao, mas nao remove nem bane o jogador.
+Os modos por detector são `passive`, `mitigate`, `kick` e `ban`. `kick` e `ban` exigem suas chaves globais, evidência confirmada, persistência e identidade estável; continuam desligados por padrão. O score legado permanece informativo e não contorna o motor unificado. Veja [docs/WAVE2A_ENFORCEMENT.md](docs/WAVE2A_ENFORCEMENT.md).
 
 ## Comandos
 

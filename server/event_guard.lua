@@ -138,6 +138,17 @@ local function consumeLease(sourceId, capability, context)
     return MZBan.SecurityLeases.Consume(sourceId, capability, context or {}) == true
 end
 
+local function projectileAuthority(sourceId, weaponHash)
+    if config().projectileAuthorityEnabled == false or not weaponHash then return nil end
+    local inventory = tostring(Config.Integration and Config.Integration.InventoryResource or 'mz_inventory')
+    if GetResourceState(inventory) ~= 'started' then return nil end
+    local ok, authorized, reason, state = pcall(function()
+        return exports[inventory]:IsWeaponAuthorized(sourceId, weaponHash)
+    end)
+    if not ok then return nil end
+    return authorized == true, tostring(reason or 'authority_unknown'), type(state) == 'table' and state or nil
+end
+
 AddEventHandler('explosionEvent', function(sender, data)
     if type(data) ~= 'table' then return end
     if MZBan.DetectorHealth then MZBan.DetectorHealth.Seen('event_guard.explosion') end
@@ -238,6 +249,16 @@ AddEventHandler('startProjectileEvent', function(sender, data)
     observeRate(sender, 'projectile', weaponHash or projectileHash or 'all', {
         weaponHash = weaponHash, projectileHash = projectileHash
     })
+    local authorized, reason, state = projectileAuthority(sender, weaponHash)
+    if authorized == false then
+        immediate(sender, 'projectile_weapon_unauthorized', weaponHash or projectileHash or 'unknown',
+            reason, {
+                weaponHash = weaponHash,
+                projectileHash = projectileHash,
+                authorizedWeaponHash = state and state.weaponHash or nil,
+                authorityReason = reason
+            }, 'medium')
+    end
 end)
 
 local function unwrapFireData(raw)

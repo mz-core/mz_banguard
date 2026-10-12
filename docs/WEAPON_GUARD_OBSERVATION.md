@@ -14,7 +14,7 @@ Nesse estado nenhum dano e cancelado e nenhuma rotina de kick, ban ou flag de ri
 
 A assinatura usada e a oficial da Cfx: `weaponDamageEvent(sender, data)`, com `weaponType`, `weaponDamage`, `hitGlobalId`, `overrideDefaultDamage` e `willKill` no payload. Referencia: https://docs.fivem.net/docs/scripting-reference/events/server-events/
 
-O cancelamento so pode ocorrer para `weapon_damage_no_equipped_weapon` e `weapon_damage_hash_mismatch` quando as tres condicoes forem explicitamente verdadeiras: `mode == 'enforce'`, `cancelHighConfidence == true` e `runtimeValidated == true`. Transicao, sessao nao pronta, payload invalido, hash desconhecido e taxa suspeita nunca sao cancelados por esse caminho.
+O cancelamento so pode ocorrer para `weapon_damage_no_equipped_weapon`, `weapon_damage_hash_mismatch` e `weapon_damage_death_state_incompatible` quando `mode` for `mitigate`/`enforce`, `cancelHighConfidence == true` e `runtimeValidated == true`. LAB nunca e cancelado por esse caminho. `WEAPON_UNARMED` e tratado explicitamente fora do ownership de item equipado.
 
 ## Classificacoes
 

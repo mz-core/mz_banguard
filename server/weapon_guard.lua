@@ -3,6 +3,7 @@ MZBan.WeaponGuard = MZBan.WeaponGuard or {}
 
 local rateBySource = {}
 local knownWeaponByHash = {}
+local unarmedWeaponByHash = {}
 
 local function config()
     return type(Config.WeaponGuard) == 'table' and Config.WeaponGuard or {}
@@ -33,10 +34,17 @@ end
 
 local function buildKnownWeapons()
     knownWeaponByHash = {}
+    unarmedWeaponByHash = {}
     for _, weaponName in ipairs(config().knownWeaponNames or {}) do
         if type(weaponName) == 'string' and weaponName ~= '' then
             local hash = normalizeHash(joaat(weaponName))
             if hash then knownWeaponByHash[hash] = weaponName end
+        end
+    end
+    for _, weaponName in ipairs(config().unarmedWeaponNames or { 'WEAPON_UNARMED' }) do
+        if type(weaponName) == 'string' and weaponName ~= '' then
+            local hash = normalizeHash(joaat(weaponName))
+            if hash then unarmedWeaponByHash[hash] = weaponName end
         end
     end
 end
@@ -145,14 +153,27 @@ local function targetContext(source, data)
 end
 
 local function queryAuthority(source)
-    local core = tostring(Config.Integration and Config.Integration.CoreResource or 'mz_core')
-    if GetResourceState(core) ~= 'started' then return nil, 'core_unavailable' end
+    local inventory = tostring(Config.Integration and Config.Integration.InventoryResource or 'mz_inventory')
+    if GetResourceState(inventory) ~= 'started' then return nil, 'inventory_unavailable' end
     local ok, state, reason = pcall(function()
-        return exports[core]:GetEquippedWeaponState(source)
+        return exports[inventory]:GetEquippedWeaponState(source)
     end)
     if not ok then return nil, 'authority_export_error' end
     if type(state) ~= 'table' then return nil, tostring(reason or 'authority_state_unavailable') end
     return state, tostring(reason or (state.equipped and 'weapon_equipped' or 'weapon_not_equipped'))
+end
+
+local function queryDeathState(source)
+    local core = tostring(Config.Integration and Config.Integration.CoreResource or 'mz_core')
+    if GetResourceState(core) ~= 'started' then return nil end
+    local ok, available, state = pcall(function()
+        return exports[core]:GetDeathState(source)
+    end)
+    if not ok or available ~= true or type(state) ~= 'table' then return nil end
+    local deathState = tostring(state.deathState or '')
+    if deathState ~= 'alive' and deathState ~= 'downed' and deathState ~= 'dead'
+        and deathState ~= 'respawning' then return nil end
+    return deathState, safeNumber(state.revision, 0, 2147483647)
 end
 
 local function isTransitionWindow(state, currentMs)
@@ -171,6 +192,16 @@ local function classify(source, data, currentMs)
     local reportedHash = normalizeHash(data.weaponType)
     if not reportedHash or reportedHash == 0 then
         return 'weapon_damage_payload_invalid', nil, nil, 'invalid_weapon_hash'
+    end
+
+    local deathState, stateRevision = queryDeathState(source)
+    if deathState and deathState ~= 'alive' then
+        return 'weapon_damage_death_state_incompatible', reportedHash, nil,
+            'canonical_death_state_blocks_damage', { deathState = deathState, stateRevision = stateRevision }
+    end
+
+    if unarmedWeaponByHash[reportedHash] then
+        return nil, reportedHash, nil, 'authorized_unarmed'
     end
 
     local state, authorityReason = queryAuthority(source)
@@ -209,12 +240,27 @@ local function classify(source, data, currentMs)
     return nil, reportedHash, state, 'authorized'
 end
 
-local function shouldCancel(code)
+local function mitigationCapability(code, source)
     local guard = config()
-    if guard.mode ~= 'enforce' or guard.cancelHighConfidence ~= true or guard.runtimeValidated ~= true then
-        return false
+    if MZBan.Lab and type(MZBan.Lab.IsSubject) == 'function' and MZBan.Lab.IsSubject(source) == true then
+        return { supported = false, reason = 'lab_mode', resource = GetCurrentResourceName() }
     end
-    return code == 'weapon_damage_no_equipped_weapon' or code == 'weapon_damage_hash_mismatch'
+    local supportedCode = code == 'weapon_damage_no_equipped_weapon' or code == 'weapon_damage_hash_mismatch'
+        or code == 'weapon_damage_death_state_incompatible'
+    if not supportedCode then
+        return { supported = false, reason = 'weapon_detector_not_cancelable', resource = GetCurrentResourceName() }
+    end
+    if guard.cancelHighConfidence ~= true or guard.runtimeValidated ~= true then
+        return { supported = false, reason = 'weapon_cancel_runtime_not_validated', resource = GetCurrentResourceName() }
+    end
+    return {
+        supported = true,
+        resource = GetCurrentResourceName(),
+        execute = function()
+            CancelEvent()
+            return true, 'blocked', 'weapon_damage_event_cancelled'
+        end
+    }
 end
 
 local function recordWeaponDamage(sender, data)
@@ -224,7 +270,6 @@ local function recordWeaponDamage(sender, data)
     local currentMs = math.max(0, math.floor(tonumber(GetGameTimer()) or 0))
     local code, reportedHash, state, reason, rateEvidence = classify(source, data, currentMs)
     if not code then return end
-
     data = type(data) == 'table' and data or {}
     local evidence, targetNetId = targetContext(source, data)
     for key, value in pairs(rateEvidence or {}) do evidence[key] = value end
@@ -256,7 +301,8 @@ local function recordWeaponDamage(sender, data)
         reason = reason,
         origin = 'weaponDamageEvent',
         confidence = code == 'weapon_damage_rate_suspect' and 'medium' or 'high',
-        evidence = evidence
+        evidence = evidence,
+        enforcement = mitigationCapability(code, source)
     })
 
     if incident then
@@ -272,8 +318,6 @@ local function recordWeaponDamage(sender, data)
             }))
         end
     end
-
-    if shouldCancel(code) then CancelEvent() end
 end
 
 buildKnownWeapons()
@@ -300,7 +344,7 @@ end)
 
 function MZBan.WeaponGuard.Status()
     local risk = type(Config.Risk) == 'table' and Config.Risk or {}
-    local enforcementActive = config().mode == 'enforce'
+    local mitigationActive = (config().mode == 'mitigate' or config().mode == 'enforce')
         and config().cancelHighConfidence == true
         and config().runtimeValidated == true
     return {
@@ -308,10 +352,11 @@ function MZBan.WeaponGuard.Status()
         mode = tostring(config().mode or 'observe'),
         cancelHighConfidence = config().cancelHighConfidence == true,
         runtimeValidated = config().runtimeValidated == true,
-        enforcementActive = enforcementActive,
+        mitigationActive = mitigationActive,
+        enforcementActive = mitigationActive and config().mode == 'enforce',
         autoKick = risk.AutoKick == true,
         autoBan = risk.AutoBan == true,
-        alertOnly = not enforcementActive and risk.AutoKick ~= true and risk.AutoBan ~= true,
+        alertOnly = not mitigationActive and risk.AutoKick ~= true and risk.AutoBan ~= true,
         transitionWindowMs = math.floor(tonumber(config().transitionWindowMs) or 2500),
         rateEventThreshold = math.floor(tonumber(config().rateEventThreshold) or 25),
         rateProfiles = type(config().rateProfiles) == 'table' and config().rateProfiles or {}

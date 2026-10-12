@@ -64,6 +64,22 @@ local function resolveCitizenId(sourceId)
     return citizenid ~= '' and citizenid or nil
 end
 
+local function identityMatchesSnapshot(sourceId, expectedCitizenId, expectedIdentifiers)
+    if resolveCitizenId(sourceId) ~= expectedCitizenId then return false, 'stale_target' end
+    local current = MZBan.GetIdentifiers(sourceId, { includeIp = false })
+    local currentByType = type(current) == 'table' and current.byType or {}
+    local expectedByType = type(expectedIdentifiers) == 'table' and expectedIdentifiers.byType or {}
+    local expectedLicense = sanitizeText(expectedByType.license, 160)
+    local expectedFivem = sanitizeText(expectedByType.fivem, 160)
+    if expectedLicense ~= '' and sanitizeText(currentByType.license, 160) ~= expectedLicense then
+        return false, 'stale_target'
+    end
+    if expectedFivem ~= '' and sanitizeText(currentByType.fivem, 160) ~= expectedFivem then
+        return false, 'stale_target'
+    end
+    return true
+end
+
 local function databaseReady()
     local ok, ready, err = pcall(MZBan.DB.IsReady)
     if not ok then return false, 'database_unavailable' end
@@ -144,7 +160,7 @@ function MZBan.API.IsReady()
     return true
 end
 
-function MZBan.API.CreateOnlineBan(actorSource, targetSource, duration, reason, invokingResource)
+function MZBan.API.CreateOnlineBan(actorSource, targetSource, duration, reason, invokingResource, expectedCitizenId)
     local ready, readyError = validateInvocation(invokingResource)
     if not ready then return result(false, nil, readyError) end
 
@@ -164,6 +180,12 @@ function MZBan.API.CreateOnlineBan(actorSource, targetSource, duration, reason, 
     if targetSource == actorSource then
         auditDenied('ban.create', actorSource, targetSource, GetPlayerName(targetSource), 'self_target')
         return result(false, nil, 'self_target')
+    end
+
+    expectedCitizenId = sanitizeText(expectedCitizenId, 64)
+    if invokingResource == 'mz_admin' and expectedCitizenId == '' then
+        auditDenied('ban.create', actorSource, targetSource, GetPlayerName(targetSource), 'expected_identity_required')
+        return result(false, nil, 'expected_identity_required')
     end
 
     local hierarchyAllowed, hierarchyReason, hierarchy = authorizeHierarchy(actorSource, targetSource)
@@ -188,6 +210,10 @@ function MZBan.API.CreateOnlineBan(actorSource, targetSource, duration, reason, 
     local targetName = GetPlayerName(targetSource)
     local actorName = MZBan.SafePlayerName(actorSource)
     local targetCitizenId = resolveCitizenId(targetSource)
+    if expectedCitizenId ~= '' and targetCitizenId ~= expectedCitizenId then
+        auditDenied('ban.create', actorSource, targetSource, targetName, 'stale_target')
+        return result(false, nil, 'stale_target')
+    end
     local actorCitizenId = resolveCitizenId(actorSource)
     local identifiers = MZBan.GetIdentifiers(targetSource, {
         includeIp = Config.Privacy.StoreIpLocal == true
@@ -196,6 +222,11 @@ function MZBan.API.CreateOnlineBan(actorSource, targetSource, duration, reason, 
     if not requiredOk then
         auditDenied('ban.create', actorSource, targetSource, targetName, 'missing_identifier:' .. tostring(missingType))
         return result(false, nil, 'missing_required_identifier')
+    end
+    local identityStable, identityReason = identityMatchesSnapshot(targetSource, targetCitizenId, identifiers)
+    if not identityStable then
+        auditDenied('ban.create', actorSource, targetSource, targetName, identityReason)
+        return result(false, nil, identityReason)
     end
 
     local tokens = MZBan.GetPlayerTokensSafe(targetSource)
@@ -252,8 +283,33 @@ function MZBan.API.CreateOnlineBan(actorSource, targetSource, duration, reason, 
         MZBan.Cloud.ReportBan(ban)
     end)
 
-    DropPlayer(targetSource, MZBan.Bans.FormatKickMessage(ban))
-    return result(true, { ban = MZBan.Bans.ToPublicDto(ban) })
+    local disconnectRequested = false
+    local disconnectReason = 'identity_mismatch_after_persistence'
+    local stillSameIdentity = identityMatchesSnapshot(targetSource, targetCitizenId, identifiers)
+    if stillSameIdentity then
+        local dropOk, dropError = pcall(DropPlayer, targetSource, MZBan.Bans.FormatKickMessage(ban))
+        disconnectRequested = dropOk
+        disconnectReason = dropOk and 'drop_requested' or ('drop_failed:' .. sanitizeText(dropError, 96))
+    end
+    if not disconnectRequested then
+        pcall(MZBan.DB.Audit, 'integration.ban.disconnect_not_completed', {
+            actor_source = actorSource,
+            actor_name = actorName,
+            target_source = targetSource,
+            target_name = targetName,
+            ban_public_id = ban.public_id,
+            meta = {
+                reason = disconnectReason,
+                expected_citizenid = targetCitizenId,
+                current_citizenid = resolveCitizenId(targetSource)
+            }
+        })
+    end
+    return result(true, {
+        ban = MZBan.Bans.ToPublicDto(ban),
+        disconnectRequested = disconnectRequested,
+        disconnectReason = disconnectReason
+    })
 end
 
 function MZBan.API.RevokeBan(actorSource, publicId, reason, invokingResource)
@@ -343,8 +399,10 @@ exports('IsReady', function()
     return MZBan.API.IsReady()
 end)
 
-exports('CreateOnlineBan', function(actorSource, targetSource, duration, reason)
-    return MZBan.API.CreateOnlineBan(actorSource, targetSource, duration, reason, GetInvokingResource())
+exports('CreateOnlineBan', function(actorSource, targetSource, duration, reason, expectedCitizenId)
+    return MZBan.API.CreateOnlineBan(
+        actorSource, targetSource, duration, reason, GetInvokingResource(), expectedCitizenId
+    )
 end)
 
 exports('RevokeBan', function(actorSource, publicId, reason)

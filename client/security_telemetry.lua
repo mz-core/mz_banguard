@@ -123,7 +123,20 @@ CreateThread(function()
                 tostring(health.ruleVersion or 'unknown'):sub(1, 32),
                 heartbeatSequence
             )
+            TriggerServerEvent(
+                'mz_banguard:server:resourceHeartbeat',
+                GetCurrentResourceName(),
+                tostring(health.ruleVersion or 'unknown'):sub(1, 32),
+                heartbeatSequence
+            )
         end
+    end
+end)
+
+AddEventHandler('onClientResourceStop', function(resourceName)
+    local watched = type(Config.DetectorHealth) == 'table' and Config.DetectorHealth.watchedResources or {}
+    if type(watched) == 'table' and watched[resourceName] == true then
+        TriggerServerEvent('mz_banguard:server:resourceStopObserved', resourceName)
     end
 end)
 

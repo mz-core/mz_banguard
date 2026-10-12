@@ -14,10 +14,14 @@ local permissions = { [90] = { ['alerts.view'] = true } }
 local entities = {}
 local playerCoords = { [1] = { x = 0.0, y = 0.0, z = 0.0 } }
 local cancelCount, deleteCount, dropCount, notifications = 0, 0, 0, 0
+local projectileAuthorized = true
+local adminNoClip = false
 
 Config = {
-    Integration = { CoreResource = 'mz_core' },
+    Integration = { CoreResource = 'mz_core', InventoryResource = 'mz_inventory' },
     Risk = { AutoKick = false, AutoBan = false, TrustedActions = { Enabled = true } },
+    Enforcement = { DefaultMode = 'passive', AutomaticKickEnabled = false, AutomaticBanEnabled = false },
+    DetectorActions = {},
     SecurityAlerts = {
         notifyStaff = true,
         aggregateWindowMs = 15000,
@@ -43,7 +47,8 @@ Config = {
     EntityGuard = {
         enabled = true, mode = 'observe', cancelHighConfidence = false,
         runtimeValidated = false, windowMs = 10000, inspectDelayMs = 0,
-        limits = { ped = 2, vehicle = 2, object = 2 }
+        limits = { ped = 2, vehicle = 2, object = 2 },
+        blockedModels = { ped = { [999999] = true }, vehicle = {}, object = {} }
     },
     EntityClassification = {
         enabled = true, mappingVersion = 'test-map', mappingValidated = true,
@@ -80,7 +85,8 @@ function GetGameTimer() return timer end
 function GetCurrentResourceName() return 'mz_banguard' end
 function GetInvokingResource() return nil end
 function GetResourceState(name)
-    return (name == 'mz_core' or name == 'mz_notify') and 'started' or 'missing'
+    return (name == 'mz_core' or name == 'mz_notify' or name == 'mz_inventory' or name == 'mz_admin')
+        and 'started' or 'missing'
 end
 function GetPlayerPing(source) return players[tonumber(source)] and 50 or 0 end
 function GetPlayerName(source) return players[tonumber(source)] and players[tonumber(source)].name or nil end
@@ -141,11 +147,24 @@ local resources = {
         end,
         ResolvePlayerIdentity = function(_, source)
             local player = players[tonumber(source)]
-            return player and { ok = true, citizenid = player.citizenid, name = player.name } or { ok = false }
+            return player and {
+                ok = player.characterActive ~= false,
+                active = player.characterActive ~= false,
+                characterId = player.characterActive ~= false and tonumber(source) or nil,
+                citizenid = player.citizenid,
+                name = player.name
+            } or { ok = false }
         end,
         CreateDetailedLog = function() return 1 end
     },
-    mz_notify = { Notify = function() notifications = notifications + 1 return true end }
+    mz_notify = { Notify = function() notifications = notifications + 1 return true end },
+    mz_inventory = {
+        IsWeaponAuthorized = function(_, _, weaponHash)
+            if projectileAuthorized then return true, 'weapon_authorized', { weaponHash = weaponHash } end
+            return false, 'weapon_hash_mismatch', { weaponHash = 1001 }
+        end
+    },
+    mz_admin = { IsNoClipEnabled = function() return adminNoClip end }
 }
 
 exports = setmetatable({}, {
@@ -154,6 +173,7 @@ exports = setmetatable({}, {
 })
 
 assert(loadfile('../server/incidents.lua'))()
+assert(loadfile('../server/enforcement.lua'))()
 assert(loadfile('../server/entity_classification.lua'))()
 assert(loadfile('../server/entity_guard.lua'))()
 assert(loadfile('../server/telemetry_guard.lua'))()
@@ -179,6 +199,10 @@ MZBan.TelemetryGuard.AcceptReport(1, 'player_godmode_suspect', {
     invincible = true, damageDisabled = true, fullProofs = false, health = 200, armour = 100
 })
 check(#MZBan.Incidents.List({ filter = 'player_state' }) == 1, 'validated client telemetry creates player-state incident')
+players[1].characterActive = false
+check(MZBan.TelemetryGuard.AcceptReport(1, 'player_invisible_suspect', { alpha = 0 }) == false,
+    'selection lifecycle telemetry was not rejected')
+players[1].characterActive = true
 check(MZBan.TelemetryGuard.AcceptReport(1, 'forged_code', {}) == false, 'unknown client code is rejected')
 
 MZBan.TelemetryGuard.SampleMovement(1, timer)
@@ -186,11 +210,32 @@ timer = timer + 1000
 playerCoords[1] = { x = 500.0, y = 0.0, z = 0.0 }
 MZBan.TelemetryGuard.SampleMovement(1, timer)
 check(#MZBan.Incidents.List({ filter = 'movement' }) == 1, 'server position delta creates movement incident')
+local movementIncident = MZBan.Incidents.List({ filter = 'movement' })[1]
+adminNoClip = true
+timer = timer + 1000
+playerCoords[1] = { x = 1000.0, y = 0.0, z = 0.0 }
+MZBan.TelemetryGuard.SampleMovement(1, timer)
+check(MZBan.Incidents.Get(movementIncident.id).count == 1,
+    'authorized admin noclip was scored before context resolution')
+adminNoClip = false
 
 MZBan.EventGuard.Observe(1, 'explosion', 2, {})
 MZBan.EventGuard.Observe(1, 'explosion', 2, {})
 MZBan.EventGuard.Observe(1, 'explosion', 2, {})
 check(#MZBan.Incidents.List({ filter = 'event' }) == 1, 'event rate creates event incident')
+
+for _, callback in ipairs(handlers.startProjectileEvent or {}) do
+    callback(1, { weaponHash = 1001, projectileHash = 7001 })
+end
+local eventCountBeforeUnauthorized = #MZBan.Incidents.List({ filter = 'event' })
+projectileAuthorized = false
+for _, callback in ipairs(handlers.startProjectileEvent or {}) do
+    callback(1, { weaponHash = 2002, projectileHash = 7002 })
+end
+local projectileIncident = MZBan.Incidents.List({ filter = 'event' })[1]
+check(#MZBan.Incidents.List({ filter = 'event' }) == eventCountBeforeUnauthorized + 1
+    and projectileIncident.code == 'projectile_weapon_unauthorized',
+    'projectile authority did not distinguish authorized from unauthorized state')
 
 for index = 1, 5 do
     MZBan.AimGuard.Observe(1, { weaponType = 1001, hitComponent = index <= 4 and 31086 or 0 })
@@ -209,6 +254,20 @@ local status = MZBan.Security.Status()
 check(status.alertOnly == true and status.autoKick == false and status.autoBan == false, 'combined status remains alert-only')
 check(status.modules.entity.mode == 'observe' and status.modules.aim.mode == 'observe', 'new modules expose observe mode')
 check(cancelCount == 0 and deleteCount == 0 and dropCount == 0, 'observers never cancel delete kick or ban')
+
+Config.EntityGuard.mode = 'mitigate'
+Config.DetectorActions.entity_model_blocked = 'mitigate'
+Config.EntityGuard.cancelHighConfidence = true
+entities[3000] = { type = 1, owner = 1, model = 999999, population = 7, coords = { x = 1, y = 1, z = 1 } }
+for _, callback in ipairs(handlers.entityCreating or {}) do callback(3000) end
+check(cancelCount == 0, 'entityCreating canceled without runtime validation')
+Config.EntityGuard.runtimeValidated = true
+entities[3001] = { type = 1, owner = 1, model = 999999, population = 7, coords = { x = 1, y = 1, z = 1 } }
+for _, callback in ipairs(handlers.entityCreating or {}) do callback(3001) end
+check(cancelCount == 1 and deleteCount == 0 and dropCount == 0,
+    'validated mitigate mode did not cancel blocked entity creation')
+Config.EntityGuard.mode = 'observe'
+Config.DetectorActions.entity_model_blocked = nil
 
 local clientFile = assert(io.open('../client/security_telemetry.lua', 'rb'))
 local clientSource = clientFile:read('*a')

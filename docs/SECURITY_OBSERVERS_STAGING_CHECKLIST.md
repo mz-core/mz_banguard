@@ -15,7 +15,7 @@ Config.EventGuard.mode = 'observe'
 Config.AimGuard.mode = 'observe'
 ```
 
-Nesta entrega, Entity, Movement, Player State, Event e Aim Guard nao possuem caminho de cancelamento. Eles somente registram, agregam e notificam pela Central de Alertas. O Weapon Guard preserva suas travas anteriores de enforce, todas desligadas por padrao.
+Entity Guard e Weapon Guard possuem caminho de mitigacao cercado por modo, flag especifica e `runtimeValidated`; todas as travas permanecem desligadas por padrao. Movement, Player State, Event e Aim continuam detect-only. `ptFxEvent` e `startProjectileEvent` nao sao cancelados sem validacao especifica do artifact.
 
 `Config.SecurityAlerts.notifyMinimumSeverity = 'medium'` faz sinais medium/high/critical enviarem popup para Staff autorizado durante staging. `info` e `low` permanecem apenas na Central. O cooldown evita uma notificacao por amostra.
 

@@ -10,6 +10,9 @@ local hierarchyReason = 'target_not_staff'
 local createdBan
 local revokedPublicId
 local droppedPlayer
+local targetCitizenid = 'PLAYER002'
+local targetLicense = 'license:test'
+local reuseAfterCreate = false
 
 local function expect(condition, message)
     if not condition then error(message, 2) end
@@ -55,6 +58,10 @@ MZBan = {
                 created_at = 1700000000,
                 updated_at = 1700000000
             }
+            if reuseAfterCreate then
+                targetCitizenid = 'PLAYER-REUSED'
+                targetLicense = 'license:reused'
+            end
             return createdBan
         end,
         Revoke = function(publicId)
@@ -128,7 +135,7 @@ MZBan = {
     Now = function() return 1700000000 end,
     SafePlayerName = function(sourceId) return sourceId == 1 and 'Staff' or 'Target' end,
     GetIdentifiers = function()
-        return { byType = { license = 'license:test' }, raw = { 'license:test' } }
+        return { byType = { license = targetLicense }, raw = { targetLicense } }
     end,
     HasRequiredIdentifiers = function() return true end,
     GetPlayerTokensSafe = function() return { 'token:test' } end,
@@ -147,7 +154,7 @@ local core = {
     end,
     ResolvePlayerIdentity = function(_, sourceId)
         if sourceId == 1 then return { ok = true, citizenid = 'STAFF001' } end
-        if sourceId == 2 then return { ok = true, citizenid = 'PLAYER002' } end
+        if sourceId == 2 then return { ok = true, citizenid = targetCitizenid } end
         return { ok = false, error = 'not_found' }
     end
 }
@@ -192,23 +199,38 @@ expect(denied.ok == false and denied.error == 'permission_denied', 'ban sem perm
 expect(createdBan == nil and droppedPlayer == nil, 'ban sem permissao causou mutacao')
 
 permissions['staff.players.ban'] = true
+local missingIdentity = exported.CreateOnlineBan(1, 2, 'perm', 'motivo seguro')
+expect(missingIdentity.ok == false and missingIdentity.error == 'expected_identity_required',
+    'ban administrativo sem identidade esperada nao falhou fechado')
 hierarchyAllowed = false
 hierarchyReason = 'target_higher_or_equal'
-denied = exported.CreateOnlineBan(1, 2, 'perm', 'motivo seguro')
+denied = exported.CreateOnlineBan(1, 2, 'perm', 'motivo seguro', 'PLAYER002')
 expect(denied.ok == false and denied.error == 'target_higher_or_equal', 'hierarquia igual/superior foi ignorada')
 expect(createdBan == nil and droppedPlayer == nil, 'negacao hierarquica causou mutacao')
 
 hierarchyAllowed = true
 hierarchyReason = 'target_not_staff'
-local invalidDuration = exported.CreateOnlineBan(1, 2, 'ontem', 'motivo seguro')
+local invalidDuration = exported.CreateOnlineBan(1, 2, 'ontem', 'motivo seguro', 'PLAYER002')
 expect(invalidDuration.ok == false and invalidDuration.error == 'invalid_duration', 'duracao invalida foi aceita')
 
-local created = exported.CreateOnlineBan(1, 2, '7d', 'motivo seguro')
+local created = exported.CreateOnlineBan(1, 2, '7d', 'motivo seguro', 'PLAYER002')
 expect(created.ok == true and created.data.ban.publicId == 'MBG-ABC234', 'ban autorizado nao retornou DTO')
 expect(created.data.ban.citizenId == 'PLAYER002', 'ban nao retornou CitizenID resolvido no servidor')
 expect(createdBan.evidence.target_citizenid == 'PLAYER002', 'ban nao persistiu CitizenID contextual')
 expect(droppedPlayer and droppedPlayer.source == 2, 'alvo nao foi removido apos persistencia')
 expect(droppedPlayer.reason:find('MBG-ABC234', 1, true) ~= nil, 'mensagem perdeu Public ID')
+
+droppedPlayer = nil
+reuseAfterCreate = true
+local persistedAfterReuse = exported.CreateOnlineBan(1, 2, '7d', 'motivo seguro', 'PLAYER002')
+expect(persistedAfterReuse.ok == true and persistedAfterReuse.data.disconnectRequested == false,
+    'ban persistido apos source reuse nao informou desconexao cancelada')
+expect(persistedAfterReuse.data.disconnectReason == 'identity_mismatch_after_persistence',
+    'ban persistido apos source reuse perdeu motivo tecnico')
+expect(droppedPlayer == nil, 'ban administrativo desconectou novo ocupante do source')
+reuseAfterCreate = false
+targetCitizenid = 'PLAYER002'
+targetLicense = 'license:test'
 
 permissions['staff.bans.view'] = false
 local hidden = exported.ListBans(1, { active = true })

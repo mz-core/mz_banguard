@@ -7,7 +7,7 @@ local function check(condition, label)
 end
 
 local timer = 20000
-local resourceStates = { mz_core = 'started', mz_notify = 'started', mz_banguard = 'started' }
+local resourceStates = { mz_core = 'started', mz_inventory = 'started', mz_notify = 'started', mz_banguard = 'started' }
 local players = {
     [1] = { name = 'Target One', citizenid = 'CID-1', license = 'license:one', fivem = 'fivem:one' },
     [2] = { name = 'Target Two', citizenid = 'CID-2', license = 'license:two', fivem = 'fivem:two' },
@@ -22,10 +22,13 @@ local notificationCount = 0
 local cancelCount = 0
 local invokingResource = 'mz_admin'
 local hierarchyAllowed = true
-local hashes = { WEAPON_PISTOL = 1001, WEAPON_SMG = 1002, WEAPON_RPG = 1003 }
+local deathStates = {}
+local hashes = { WEAPON_PISTOL = 1001, WEAPON_SMG = 1002, WEAPON_RPG = 1003, WEAPON_UNARMED = 2725352035 }
 
 Config = {
-    Integration = { CoreResource = 'mz_core' },
+    Integration = { CoreResource = 'mz_core', InventoryResource = 'mz_inventory' },
+    Enforcement = { DefaultMode = 'passive', AutomaticKickEnabled = false, AutomaticBanEnabled = false },
+    DetectorActions = {},
     WeaponGuard = {
         enabled = true,
         mode = 'observe',
@@ -59,7 +62,8 @@ Config = {
             weapon_damage_rate_suspect = 25, weapon_damage_session_not_ready = 0,
             weapon_damage_transition_window = 0
         },
-        knownWeaponNames = { 'WEAPON_PISTOL', 'WEAPON_SMG', 'WEAPON_RPG' }
+        knownWeaponNames = { 'WEAPON_PISTOL', 'WEAPON_SMG', 'WEAPON_RPG' },
+        unarmedWeaponNames = { 'WEAPON_UNARMED' }
     }
 }
 
@@ -112,7 +116,12 @@ local resources = {
             return { ok = true, citizenid = player.citizenid, name = player.name }
         end,
         CreateDetailedLog = function() return 123 end,
-        CanStaffActOnPlayer = function(_, _, _) return hierarchyAllowed, hierarchyAllowed and 'authorized' or 'hierarchy_denied' end,
+        GetDeathState = function(_, source)
+            return true, { deathState = deathStates[tonumber(source)] or 'alive', revision = 7 }
+        end,
+        CanStaffActOnPlayer = function(_, _, _) return hierarchyAllowed, hierarchyAllowed and 'authorized' or 'hierarchy_denied' end
+    },
+    mz_inventory = {
         GetEquippedWeaponState = function(_, source)
             local state = authority[tonumber(source)]
             if state == false then return nil, 'player_not_loaded' end
@@ -132,6 +141,7 @@ exports = setmetatable({}, {
 })
 
 assert(loadfile('../server/incidents.lua'))()
+assert(loadfile('../server/enforcement.lua'))()
 assert(loadfile('../server/weapon_guard.lua'))()
 assert(loadfile('../server/alerts_api.lua'))()
 
@@ -148,6 +158,10 @@ permissions[90] = {
 authority[1] = { equipped = true, citizenid = 'CID-1', weaponHash = 1001, weaponName = 'WEAPON_PISTOL', ammo = 12, lastTransitionAt = 10000 }
 handlers.weaponDamageEvent(1, { weaponType = 1001, weaponDamage = 20 })
 check(MZBan.Incidents.Summary().total == 0, 'authorized damage must not create incident')
+
+authority[1] = { equipped = false, citizenid = 'CID-1', lastTransitionAt = 0 }
+handlers.weaponDamageEvent(1, { weaponType = 2725352035, weaponDamage = 5 })
+check(MZBan.Incidents.Summary().total == 0, 'legitimate unarmed damage created a weapon incident')
 
 authority[1] = { equipped = false, citizenid = 'CID-1', lastTransitionAt = 0, transitionRevision = 8, ammoRevision = 3 }
 handlers.weaponDamageEvent(1, { weaponType = 1001, weaponDamage = 20, hitGlobalId = 501, hitComponent = 20 })
@@ -193,6 +207,9 @@ check(MZBan.Incidents.List({ player = 'CID-3' })[1].code == 'weapon_damage_rate_
 check(cancelCount == 0, 'observe mode never cancels damage')
 
 Config.WeaponGuard.mode = 'enforce'
+Config.DetectorActions.weapon_damage_no_equipped_weapon = 'mitigate'
+Config.DetectorActions.weapon_damage_hash_mismatch = 'mitigate'
+Config.DetectorActions.weapon_damage_death_state_incompatible = 'mitigate'
 Config.WeaponGuard.cancelHighConfidence = true
 Config.WeaponGuard.runtimeValidated = false
 authority[1] = { equipped = false, citizenid = 'CID-1', lastTransitionAt = 0 }
@@ -201,7 +218,21 @@ check(cancelCount == 0, 'enforcement without runtime validation remains inert')
 Config.WeaponGuard.runtimeValidated = true
 handlers.weaponDamageEvent(1, { weaponType = 1003 })
 check(cancelCount == 1, 'fully armed high-confidence enforcement can cancel')
+Config.WeaponGuard.mode = 'mitigate'
+handlers.weaponDamageEvent(1, { weaponType = 1002 })
+check(cancelCount == 2, 'mitigate mode did not cancel a validated canonical mismatch')
+deathStates[2] = 'dead'
+authority[2] = { equipped = true, citizenid = 'CID-2', weaponHash = 1002, weaponName = 'WEAPON_SMG', lastTransitionAt = 0 }
+handlers.weaponDamageEvent(2, { weaponType = 1002 })
+local deadIncident = MZBan.Incidents.List({ player = 'CID-2' })[1]
+check(deadIncident and deadIncident.code == 'weapon_damage_death_state_incompatible'
+    and deadIncident.culpability == 'supported' and cancelCount == 3,
+    'canonical dead state did not block damage in mitigate mode')
+deathStates[2] = 'alive'
 Config.WeaponGuard.mode = 'observe'
+Config.DetectorActions.weapon_damage_no_equipped_weapon = nil
+Config.DetectorActions.weapon_damage_hash_mismatch = nil
+Config.DetectorActions.weapon_damage_death_state_incompatible = nil
 
 permissions[90]['alerts.view'] = nil
 check(exported.ListSecurityIncidents(90, {}).ok == false, 'list requires view permission')
@@ -215,7 +246,7 @@ check(exported.GetSecurityIncident(90, firstId, false).ok == true, 'details perm
 check(exported.GetSecurityIncident(90, firstId, true).ok == false, 'identifier permission is separate')
 permissions[90]['alerts.identifiers'] = true
 local identified = exported.GetSecurityIncident(90, firstId, true)
-check(identified.ok and identified.data.incident.identifiers.license == 'license:one', 'authorized identifier access succeeds')
+check(identified.ok and identified.data.incident.identifiers.masked.license == 'license:...','authorized masked identifier access succeeds')
 
 check(exported.AcknowledgeSecurityIncident(90, firstId).ok == true, 'acknowledge operation')
 check(exported.AddSecurityIncidentNote(90, firstId, 'reviewed by harness').ok == true, 'note operation')
